@@ -1,6 +1,7 @@
 import Data.Char
 
 data ArithOperator = Plus | Minus | Times | Div | Mod | Exp
+  deriving (Eq)
 
 arithOperator :: Char -> ArithOperator
 arithOperator c
@@ -25,7 +26,7 @@ data Token = TokOp ArithOperator
            | TokConstant String
            | TokIntValue Int
            | TokEnd
-  deriving(Show)
+  deriving (Eq, Show)
 
 data Expression = BinaryNode ArithOperator Expression Expression
                 | IntValue Int
@@ -34,82 +35,74 @@ data Expression = BinaryNode ArithOperator Expression Expression
 
 instance Show Expression where
   show (IntValue n) = show n
-  show (Variable str) = str
-  show (Constant str) = str
-  show (BinaryNode op lhs rhs) = pars lhs ++ (show op) ++ pars rhs
-    where pars (BinaryNode op lhs rhs) = "(" ++ show (BinaryNode op lhs rhs) ++ ")"
-          pars e = show e
+  show (Variable str) = "[" ++ str ++ "]"
+  show (Constant str) = "<" ++ str ++ ">"
+  show (BinaryNode op lhs rhs) = parens lhs ++ (show op) ++ parens rhs
+    where parens (BinaryNode op lhs rhs) = "(" ++ show (BinaryNode op lhs rhs) ++ ")"
+          parens e = show e
 
-parseExpression :: String -> (String,[String])
-parseExpression str = parseE "" (lexer str)
+parseExpression :: String -> Expression
+parseExpression str =
+  let (exp, (TokEnd : [])) = parseE (lexer str)
+  in exp
 
--- E  -> T E'
-parseE :: String -> [String] -> (String, [String])
-parseE accepted tokens = parseE' acc rest
-  where (acc, rest) = parseT accepted tokens
+-- E  -> T E
+-- E -> + T E
+-- E -> - T E
+-- E -> epsilon
+parseE :: [Token] -> (Expression, [Token])
+parseE tokens =
+  let (lhs, (tok : toks)) = parseT tokens
+  in
+    case tok of
+      (TokOp op) | elem op [Plus, Minus] ->
+        let (rhs, rest) = parseE toks
+        in (BinaryNode op lhs rhs, rest)
+      _ -> (lhs, (tok : toks))
 
--- E' -> + T E'
--- E' -> - T E'
--- E' -> epsilon
-parseE' :: String -> [String] -> (String,[String])
-parseE' accepted ("+":tokens) =
-  let (acc,rest) = parseT (accepted++"+") tokens in parseE' acc rest
-parseE' accepted ("-":tokens) =
-  let (acc,rest) = parseT (accepted++"-") tokens in parseE' acc rest
-parseE' accepted tokens = (accepted, tokens)
-
--- T  -> F T'
-parseT :: String -> [String] -> (String,[String])
-parseT accepted tokens = parseT' acc rest
-  where (acc, rest) = parseF accepted tokens
-
--- T' -> * F T'
--- T' -> / F T'
--- T' -> epsilon
-parseT' :: String -> [String] -> (String,[String])
-parseT' accepted ("*":tokens) =
-  let (acc,rest) = parseT' (accepted++"*") tokens
-  in parseF acc rest
-parseT' accepted ("/":tokens) =
-  let (acc,rest) = parseT' (accepted++"/") tokens
-  in parseF acc rest
-parseT' accepted tokens = (accepted, tokens)
+-- T  -> F T
+-- T -> * F T
+-- T -> / F T
+-- T -> epsilon
+parseT :: [Token] -> (Expression, [Token])
+parseT tokens =
+  let (lhs, (tok : toks)) = parseF tokens
+  in
+    case tok of
+      (TokOp op) | elem op [Times, Div] ->
+        let (rhs, rest) = parseT toks
+        in (BinaryNode op lhs rhs, rest)
+      _ -> (lhs, (tok : toks))
 
 -- F -> (E)
 -- F -> <Int>
 -- F -> <Var>
 -- F -> <Const>
-parseF :: String -> [String] -> (String, [String])
-parseF accepted [] = error "Parse error...abort"
-parseF accepted (tok:tokens)
- | tok == "(" = let (acc,rest) = parseE "" tokens
-                in (accepted++"("++acc++")", tail rest) -- needs improvement
- | isLower (head tok) = (accepted++"["++tok++"]", tokens) -- var
- | isUpper (head tok) = (accepted++"<"++tok++">", tokens) -- const
- | isDigit (head tok) = (accepted++tok, tokens)
- | otherwise = error ("Syntax Error: " ++ tok)
+parseF :: [Token] -> (Expression, [Token])
+parseF [] = error "Token expected"
+parseF (tok : tokens) =
+  case tok of
+    (TokVariable str) -> ((Variable str), tokens)
+    (TokConstant str) -> ((Constant str), tokens)
+    (TokIntValue n) -> ((IntValue n), tokens)
+    (TokParen '(') ->
+      let (exp, (next : rest)) = parseE tokens
+      in
+        if next /= (TokParen ')')
+        then error "Missing right parenthesis"
+        else (exp, rest)
+    _ -> error ("Syntax Error: " ++ show tok)
 
-
-
-lexer :: String -> [String]
-lexer [] = []
+lexer :: String -> [Token]
+lexer [] = [TokEnd]
 lexer (c : cs)
-  | elem c "+-*/%^()" = [c] : (lexer cs)
-  | isLower c = (c : takeWhile isAlpha cs) : lexer (dropWhile isAlpha cs)
-  | isUpper c = (c : takeWhile isAlpha cs) : lexer (dropWhile isAlpha cs)
-  | isDigit c = (c : takeWhile isDigit cs) : lexer (dropWhile isDigit cs)
+  | elem c "+-*/%^" = (TokOp (arithOperator c)) : lexer cs
+  | elem c "()" = (TokParen c) : lexer cs
+  | isLower c = (TokVariable (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
+  | isUpper c = (TokConstant (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
+  | isDigit c = (TokIntValue (read (c : takeWhile isDigit cs))) : lexer (dropWhile isDigit cs)
   | isSpace c = lexer (dropWhile isSpace cs)
-  | otherwise = error $ "Invalid character " ++ [c]
-
--- lexer2 :: String -> [Token]
--- lexer2 [] = [TokEnd]
--- lexer2 (c : cs)
---   | elem c "+-*/%^" = (TokOp (arithOperator c)) : (lexer cs)
---   | isLower c = (TokVariable (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
---   | isUpper c = (TokConstant (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
---   | isDigit c = (TokIntValue (read (c : takeWhile isDigit cs))) : lexer (dropWhile isDigit cs)
---   | isSpace c = lexer (dropWhile isSpace cs)
---   | otherwise = error $ "Invalid character " ++ [c]
+  | otherwise = error ("Invalid character " ++ [c])
 
 
 --------------------------------------------------------------------------
@@ -121,10 +114,3 @@ wp ass (BinaryNode op lhs rhs) = (BinaryNode op (wp ass lhs) (wp ass rhs))
 wp ass (IntValue n) = (IntValue n)
 wp ass (Constant str) = (Constant str)
 wp (Assign var e) (Variable str) = if (str==var) then e else (Variable str)
-
-
-main = print $ show (
-  -- 2(x+y) + 2^3 - 2 / Y 
-  BinaryNode Minus
-    (BinaryNode Plus (BinaryNode Times (IntValue 2) (BinaryNode Plus (Variable "x") (Variable "y"))) (BinaryNode Exp (IntValue 2) (IntValue 3)))
-    (BinaryNode Div (IntValue 2) (Constant "Y")))
