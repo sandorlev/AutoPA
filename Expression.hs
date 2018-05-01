@@ -25,6 +25,7 @@ data Token = TokOp ArithOperator
            | TokVariable String
            | TokConstant String
            | TokIntValue Int
+           | TokAssign
            | TokEnd
   deriving (Eq, Show)
 
@@ -41,10 +42,20 @@ instance Show Expression where
     where parens (BinaryNode op lhs rhs) = "(" ++ show (BinaryNode op lhs rhs) ++ ")"
           parens e = show e
 
+instance Eq Expression where
+  (IntValue x) == (IntValue y) = x == y
+  (Variable x) == (Variable y) = x == y
+  (Constant x) == (Constant y) = x == y
+  (BinaryNode op1 lhs1 rhs1) == (BinaryNode op2 lhs2 rhs2) =
+    (op1 == op2) && (lhs1 == lhs2) && (rhs1 == rhs2)
+
 parseExpression :: String -> Expression
 parseExpression str =
-  let (exp, (TokEnd : [])) = parseE (lexer str)
-  in exp
+  let (exp, (tok : tokens)) = parseE (lexer str)
+  in
+    case tok of
+    TokEnd -> exp
+    _ -> error ("Unused tokens: " ++ show tokens)
 
 -- E  -> T E
 -- E -> + T E
@@ -58,26 +69,28 @@ parseE tokens =
       (TokOp op) | elem op [Plus, Minus] ->
         let (rhs, rest) = parseE toks
         in (BinaryNode op lhs rhs, rest)
+      TokAssign -> error "Assignment not allowed in expressions"
       _ -> (lhs, (tok : toks))
 
 -- T  -> F T
 -- T -> * F T
 -- T -> / F T
+-- T -> % F T
 -- T -> epsilon
 parseT :: [Token] -> (Expression, [Token])
 parseT tokens =
   let (lhs, (tok : toks)) = parseF tokens
   in
     case tok of
-      (TokOp op) | elem op [Times, Div] ->
+      (TokOp op) | elem op [Times, Div, Mod] ->
         let (rhs, rest) = parseT toks
         in (BinaryNode op lhs rhs, rest)
       _ -> (lhs, (tok : toks))
 
--- F -> (E)
--- F -> <Int>
 -- F -> <Var>
 -- F -> <Const>
+-- F -> <Int>
+-- F -> (E)
 parseF :: [Token] -> (Expression, [Token])
 parseF [] = error "Token expected"
 parseF (tok : tokens) =
@@ -98,6 +111,7 @@ lexer [] = [TokEnd]
 lexer (c : cs)
   | elem c "+-*/%^" = (TokOp (arithOperator c)) : lexer cs
   | elem c "()" = (TokParen c) : lexer cs
+  | c == '=' = TokAssign : lexer cs
   | isLower c = (TokVariable (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
   | isUpper c = (TokConstant (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
   | isDigit c = (TokIntValue (read (c : takeWhile isDigit cs))) : lexer (dropWhile isDigit cs)
@@ -109,8 +123,29 @@ lexer (c : cs)
 
 data Assignment = Assign String Expression
 
+instance Show Assignment where
+  show (Assign var exp) = "[" ++ var ++ "]=" ++ show exp
+
+parseAssignment :: String -> Assignment
+parseAssignment str = parseA (lexer str)
+
+parseA :: [Token] -> Assignment
+parseA (TokVariable var : TokAssign : tokens) =
+  let (exp, (tok : rest)) = parseE tokens
+  in
+    case tok of
+    TokEnd -> (Assign var exp)
+    _ -> error ("Unused tokens: " ++ show rest)
+parseA (tok : _) = error ("Syntax error: " ++ show tok)
+
+
 wp :: Assignment -> Expression -> Expression
 wp ass (BinaryNode op lhs rhs) = (BinaryNode op (wp ass lhs) (wp ass rhs))
 wp ass (IntValue n) = (IntValue n)
 wp ass (Constant str) = (Constant str)
 wp (Assign var e) (Variable str) = if (str==var) then e else (Variable str)
+
+parseWp :: String -> String -> Expression
+parseWp assStr expStr = wp ass exp
+  where ass = parseAssignment assStr
+        exp = parseExpression expStr
