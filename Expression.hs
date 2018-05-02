@@ -1,5 +1,40 @@
 import Data.Char
 
+--------------------------------------------------------------------------
+-- Lexer                                                                --
+--------------------------------------------------------------------------
+
+data Token = TokOp ArithOperator
+           | TokRel RelOperator
+           | TokParen Char
+           | TokVariable String
+           | TokConstant String
+           | TokIntValue Int
+           | TokAssign
+           | TokEnd
+  deriving (Eq, Show)
+
+lexer :: String -> [Token]
+lexer [] = [TokEnd]
+lexer (c : cs)
+  | elem c "+-*/%^" = (TokOp (arithOperator c)) : lexer cs
+  | elem c "()" = (TokParen c) : lexer cs
+  | c == ':' && (head cs) == '=' = TokAssign : lexer (tail cs)
+  | isLower c = (TokVariable (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
+  | isUpper c = (TokConstant (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
+  | isDigit c = (TokIntValue (read (c : takeWhile isDigit cs))) : lexer (dropWhile isDigit cs)
+  | isSpace c = lexer (dropWhile isSpace cs)
+  -- ugly relations
+  | elem c "<>=" && not (elem (head cs) ">=") = (TokRel (relOperator [c])) : lexer cs -- cases <, >, =
+  | c == '<' && elem (head cs) ">=" = (TokRel (relOperator (c : [head cs]))) : lexer (tail cs) -- cases <=, <>
+  | c == '>' && head cs == '=' = (TokRel (relOperator (c : [head cs]))) : lexer (tail cs) -- case >=
+  --
+  | otherwise = error ("Invalid character " ++ [c])
+
+--------------------------------------------------------------------------
+-- Expression                                                           --
+--------------------------------------------------------------------------
+
 data ArithOperator = Plus | Minus | Times | Div | Mod | Exp
   deriving (Eq)
 
@@ -20,41 +55,11 @@ instance Show ArithOperator where
   show (Mod)   = "%"
   show (Exp)   = "^"
 
-data Token = TokOp ArithOperator
-           | TokParen Char
-           | TokVariable String
-           | TokConstant String
-           | TokIntValue Int
-           | TokAssign
-           | TokEnd
-  deriving (Eq, Show)
-
 data Expression = BinaryNode ArithOperator Expression Expression
                 | UnaryNode ArithOperator Expression
                 | IntValue Int
                 | Variable String
                 | Constant String
-  --deriving (Show)
-
---evaluate :: ArithOperator -> Int -> Int -> Int
---evaluate Plus lhs rhs = lhs + rhs
---evaluate Minus lhs rhs = lhs - rhs
---evaluate Times lhs rhs = lhs * rhs
---evaluate Div lhs rhs = quot lhs rhs
---evaluate Mod lhs rhs = mod lhs rhs
-
---simplify :: Expression -> Expression
---simplify (BinaryNode op (IntValue lhs) (IntValue rhs)) =
---  (IntValue (evaluate op lhs rhs))
---simplify (BinaryNode op lhs rhs) = (BinaryNode op (simplify lhs) (simplify rhs))
---simplify x = x
-
---instance Eq Expression where
---  (IntValue x) == (IntValue y) = x == y
---  (Variable x) == (Variable y) = x == y
---  (Constant x) == (Constant y) = x == y
---  (BinaryNode op1 lhs1 rhs1) == (BinaryNode op2 lhs2 rhs2) =
---    (op1 == op2) && (lhs1 == lhs2) && (rhs1 == rhs2)
 
 instance Show Expression where
   show (IntValue n) = show n
@@ -96,7 +101,7 @@ parseT tokens =
   let (lhs, rest) = parseF tokens
   in parseT' lhs rest
 
--- T' -> ("*" | "/") F
+-- T' -> ("*" | "/" | "%") F
 -- T' -> epsilon
 -- (TODO: Mod)
 parseT' :: Expression -> [Token] -> (Expression, [Token])
@@ -146,46 +151,87 @@ parseP (tok : tokens) =
       in ((UnaryNode Minus exp), rest)
     _ -> error ("Syntax Error: " ++ show tok)
 
-lexer :: String -> [Token]
-lexer [] = [TokEnd]
-lexer (c : cs)
-  | elem c "+-*/%^" = (TokOp (arithOperator c)) : lexer cs
-  | elem c "()" = (TokParen c) : lexer cs
-  | c == ':' && (head cs) == '=' = TokAssign : lexer (tail cs)
-  | isLower c = (TokVariable (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
-  | isUpper c = (TokConstant (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
-  | isDigit c = (TokIntValue (read (c : takeWhile isDigit cs))) : lexer (dropWhile isDigit cs)
-  | isSpace c = lexer (dropWhile isSpace cs)
-  | otherwise = error ("Invalid character " ++ [c])
-
-
+--------------------------------------------------------------------------
+-- Relation                                                             --
 --------------------------------------------------------------------------
 
---data Assignment = Assign String Expression
---
---instance Show Assignment where
---  show (Assign var exp) = "[" ++ var ++ "]=" ++ show exp
---
---parseAssignment :: String -> Assignment
---parseAssignment str = parseA (lexer str)
---
---parseA :: [Token] -> Assignment
---parseA (TokVariable var : TokAssign : tokens) =
---  let (exp, (tok : rest)) = parseE tokens
---  in
---    case tok of
---      TokEnd -> (Assign var exp)
---      _ -> error ("Unused tokens: " ++ show rest)
---parseA (tok : _) = error ("Syntax error: " ++ show tok)
---
---
---wp :: Assignment -> Expression -> Expression
---wp ass (BinaryNode op lhs rhs) = (BinaryNode op (wp ass lhs) (wp ass rhs))
---wp ass (IntValue n) = (IntValue n)
---wp ass (Constant str) = (Constant str)
---wp (Assign var e) (Variable str) = if (str==var) then e else (Variable str)
---
---parseWp :: String -> String -> Expression
---parseWp assStr expStr = wp ass exp
---  where ass = parseAssignment assStr
---        exp = parseExpression expStr
+data RelOperator = Less | LessOrEqual | Greater | GreaterOrEqual | Equal | NotEqual
+  deriving (Eq)
+
+relOperator :: String -> RelOperator
+relOperator str
+  | str == "<"  = Less
+  | str == "<=" = LessOrEqual
+  | str == ">"  = Greater
+  | str == ">=" = GreaterOrEqual
+  | str == "="  = Equal
+  | str == "<>" = NotEqual
+
+instance Show RelOperator where
+  show Less = "<"
+  show LessOrEqual = "<="
+  show Greater = ">"
+  show GreaterOrEqual = ">="
+  show Equal = "="
+  show NotEqual = "<>"
+
+data Relation = Relation RelOperator Expression Expression
+
+instance Show Relation where
+  show (Relation op lhs rhs) = show lhs ++ show op ++ show rhs
+
+parseRelation :: String -> Relation
+parseRelation str =
+  let (rel, (tok : tokens)) = parseR (lexer str)
+  in
+    case tok of
+      TokEnd -> rel
+      _ -> error ("Unused tokens: " ++ show (tok : tokens))
+
+parseR :: [Token] -> (Relation, [Token])
+parseR tokens =
+  let (lhs, (tok : toks)) = parseE tokens
+  in
+    case tok of
+      (TokRel op) ->
+        let (rhs, rest) = parseE toks
+        in ((Relation op lhs rhs), rest)
+      _ -> error ("Syntax error: " ++ show tok)
+
+--------------------------------------------------------------------------
+-- Assignment                                                           --
+--------------------------------------------------------------------------
+
+data Assignment = Assign String Expression
+
+instance Show Assignment where
+  show (Assign var exp) = "[" ++ var ++ "]:=" ++ show exp
+
+parseAssignment :: String -> Assignment
+parseAssignment str =
+  let (ass, (tok : tokens)) = parseA (lexer str)
+  in
+    case tok of
+      TokEnd -> ass
+      _ -> error ("Unused tokens: " ++ show (tok : tokens))
+
+parseA :: [Token] -> (Assignment, [Token])
+parseA (TokVariable var : TokAssign : tokens) =
+  let (exp, rest) = parseE tokens
+  in ((Assign var exp), rest)
+parseA (tok : _) = error ("Syntax error: " ++ show tok)
+
+--------------------------------------------------------------------------
+-- Weakest precondition                                                 --
+--------------------------------------------------------------------------
+
+wp :: Assignment -> Expression -> Expression
+wp ass (BinaryNode op lhs rhs) = (BinaryNode op (wp ass lhs) (wp ass rhs))
+wp ass (IntValue n) = (IntValue n)
+wp ass (Constant str) = (Constant str)
+wp (Assign var e) (Variable str) = if (str==var) then e else (Variable str)
+
+parseWp :: String -> String -> Expression
+parseWp assStr expStr = wp ass exp
+  where ass = parseAssignment assStr
+        exp = parseExpression expStr
