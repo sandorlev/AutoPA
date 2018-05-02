@@ -92,7 +92,6 @@ parseE' lhs (tok : tokens) =
     (TokOp op) | elem op [Plus, Minus] ->
       let (rhs, rest) = parseT tokens
       in parseE' (BinaryNode op lhs rhs) rest
-    TokAssign -> error "Assignment not allowed in expressions"
     _ -> (lhs, (tok : tokens))
 
 -- T -> F {T'}
@@ -231,7 +230,17 @@ wp ass (IntValue n) = (IntValue n)
 wp ass (Constant str) = (Constant str)
 wp (Assign var e) (Variable str) = if (str==var) then e else (Variable str)
 
+wpRel :: Assignment -> Relation -> Relation
+wpRel ass (Relation op lhs rhs) = (Relation op (wp ass lhs) (wp ass rhs))
+
 parseWp :: String -> String -> Expression
-parseWp assStr expStr = wp ass exp
-  where ass = parseAssignment assStr
-        exp = parseExpression expStr
+parseWp assStr expStr =
+  let ass = parseAssignment assStr
+      exp = parseExpression expStr
+  in wp ass exp
+
+parseWpRel :: String -> String -> Relation
+parseWpRel assStr relStr =
+  let ass = parseAssignment assStr
+      rel = parseRelation relStr
+  in wpRel ass rel
