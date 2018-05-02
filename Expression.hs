@@ -6,6 +6,7 @@ import Data.Char
 
 data Token = TokOp ArithOperator
            | TokComp Comparator
+           | TokBoolOp BoolOperator
            | TokParen Char
            | TokVariable String
            | TokConstant String
@@ -24,14 +25,15 @@ lexer (c : cs)
   | isUpper c = (TokConstant (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
   | isDigit c = (TokIntValue (read (c : takeWhile isDigit cs))) : lexer (dropWhile isDigit cs)
   | isSpace c = lexer (dropWhile isSpace cs)
-  -- ugly relations
+  -- ugly comparators
   -- cases <, >, =
   | elem c "<>=" && not (elem (head cs) ">=") = (TokComp (comparator [c])) : lexer cs
   -- cases <=, <>
   | c == '<' && elem (head cs) ">=" = (TokComp (comparator [c, head cs])) : lexer (tail cs)
   -- case >=
   | c == '>' && head cs == '=' = (TokComp (comparator [c, head cs])) : lexer (tail cs)
-  --
+  -- binary operators
+  | elem c "&|!" = (TokBoolOp (boolOperator c)) : lexer cs
   | otherwise = error ("Invalid character " ++ [c])
 
 --------------------------------------------------------------------------
@@ -66,8 +68,8 @@ data Expression = BinaryNode ArithOperator Expression Expression
 
 instance Show Expression where
   show (IntValue n) = show n
-  show (Variable str) = "[" ++ str ++ "]"
-  show (Constant str) = "<" ++ str ++ ">"
+  show (Variable str) = str -- "[" ++ str ++ "]"
+  show (Constant str) = str -- "{" ++ str ++ "}"
   show (BinaryNode op lhs rhs) = parens lhs ++ (show op) ++ parens rhs
     where parens (BinaryNode op lhs rhs) = "(" ++ show (BinaryNode op lhs rhs) ++ ")"
           parens e = show e
@@ -105,7 +107,6 @@ parseT tokens =
 
 -- T' -> ("*" | "/" | "%") F
 -- T' -> epsilon
--- (TODO: Mod)
 parseT' :: Expression -> [Token] -> (Expression, [Token])
 parseT' lhs (tok : tokens) =
   case tok of
@@ -201,6 +202,66 @@ parseR tokens =
       _ -> error ("Syntax error: " ++ show tok)
 
 --------------------------------------------------------------------------
+-- Boolean expression                                                    --
+--------------------------------------------------------------------------
+
+data BoolOperator = And | Or | Not
+  deriving (Eq)
+
+boolOperator :: Char -> BoolOperator
+boolOperator c
+  | c == '&' = And
+  | c == '|' = Or
+  | c == '!' = Not
+
+instance Show BoolOperator where
+  show And = "&"
+  show Or = "|"
+  show Not = "!"
+
+data BoolExpression = BoolBinaryNode BoolOperator BoolExpression BoolExpression
+                    | BoolUnaryNode BoolOperator BoolExpression
+                    | BoolRelNode Relation
+
+instance Show BoolExpression where
+  show (BoolBinaryNode op lhs rhs) = show lhs ++ " " ++ show op ++ " " ++ show rhs
+  show (BoolUnaryNode op rel) = show op ++ "(" ++ show rel ++ ")"
+  show (BoolRelNode rel) = show rel
+
+parseBoolExpression :: String -> BoolExpression
+parseBoolExpression str =
+  let (exp, (tok : tokens)) = parseB (lexer str)
+  in
+    case tok of
+      TokEnd -> exp
+      _ -> error ("Unused tokens: " ++ show (tok : tokens))
+
+-- B -> U {B'}
+parseB :: [Token] -> (BoolExpression, [Token])
+parseB tokens =
+  let (lhs, rest) = parseU tokens
+  in parseB' lhs rest
+
+-- B' -> ("&" | "|") U
+-- B' -> epsilon
+parseB' :: BoolExpression -> [Token] -> (BoolExpression, [Token])
+parseB' lhs (tok : tokens) =
+  case tok of
+    (TokBoolOp op) | elem op [And, Or] ->
+      let (rhs, rest) = parseU tokens
+      in parseB' (BoolBinaryNode op lhs rhs) rest
+    _ -> (lhs, (tok : tokens))
+
+-- U -> ["!"] R
+parseU :: [Token] -> (BoolExpression, [Token])
+parseU ((TokBoolOp Not) : tokens) =
+  let (exp, rest) = parseU tokens
+  in ((BoolUnaryNode Not exp), rest)
+parseU tokens =
+  let (rel, rest) = parseR tokens
+  in ((BoolRelNode rel), rest)
+
+--------------------------------------------------------------------------
 -- Assignment                                                           --
 --------------------------------------------------------------------------
 
@@ -227,29 +288,26 @@ parseA (tok : _) = error ("Syntax error: " ++ show tok)
 -- Weakest precondition                                                 --
 --------------------------------------------------------------------------
 
-wp :: Assignment -> Expression -> Expression
-wp ass (BinaryNode op lhs rhs) = (BinaryNode op (wp ass lhs) (wp ass rhs))
-wp ass (IntValue n) = (IntValue n)
-wp ass (Constant str) = (Constant str)
-wp (Assign var e) (Variable str) =
+wpExp :: Assignment -> Expression -> Expression
+wpExp ass (BinaryNode op lhs rhs) = (BinaryNode op (wpExp ass lhs) (wpExp ass rhs))
+wpExp ass (UnaryNode op exp) = (UnaryNode op (wpExp ass exp))
+wpExp ass (IntValue n) = (IntValue n)
+wpExp ass (Constant str) = (Constant str)
+wpExp (Assign var e) (Variable str) =
   if str == var
   then e
   else (Variable str)
 
 wpRel :: Assignment -> Relation -> Relation
-wpRel ass (Relation op lhs rhs) = (Relation op (wp ass lhs) (wp ass rhs))
+wpRel ass (Relation op lhs rhs) = (Relation op (wpExp ass lhs) (wpExp ass rhs))
 
-wpRel :: Assignment -> Relation -> Relation
-wpRel ass (Relation op lhs rhs) = (Relation op (wp ass lhs) (wp ass rhs))
+wp :: Assignment -> BoolExpression -> BoolExpression
+wp ass (BoolBinaryNode op lhs rhs) = (BoolBinaryNode op (wp ass lhs) (wp ass rhs))
+wp ass (BoolUnaryNode op exp) = (BoolUnaryNode op (wp ass exp))
+wp ass (BoolRelNode rel) = (BoolRelNode (wpRel ass rel))
 
-parseWp :: String -> String -> Expression
+parseWp :: String -> String -> BoolExpression
 parseWp assStr expStr =
   let ass = parseAssignment assStr
-      exp = parseExpression expStr
+      exp = parseBoolExpression expStr
   in wp ass exp
-
-parseWpRel :: String -> String -> Relation
-parseWpRel assStr relStr =
-  let ass = parseAssignment assStr
-      rel = parseRelation relStr
-  in wpRel ass rel
