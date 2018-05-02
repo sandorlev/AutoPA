@@ -5,7 +5,7 @@ import Data.Char
 --------------------------------------------------------------------------
 
 data Token = TokOp ArithOperator
-           | TokRel RelOperator
+           | TokComp Comparator
            | TokParen Char
            | TokVariable String
            | TokConstant String
@@ -25,9 +25,12 @@ lexer (c : cs)
   | isDigit c = (TokIntValue (read (c : takeWhile isDigit cs))) : lexer (dropWhile isDigit cs)
   | isSpace c = lexer (dropWhile isSpace cs)
   -- ugly relations
-  | elem c "<>=" && not (elem (head cs) ">=") = (TokRel (relOperator [c])) : lexer cs -- cases <, >, =
-  | c == '<' && elem (head cs) ">=" = (TokRel (relOperator (c : [head cs]))) : lexer (tail cs) -- cases <=, <>
-  | c == '>' && head cs == '=' = (TokRel (relOperator (c : [head cs]))) : lexer (tail cs) -- case >=
+  -- cases <, >, =
+  | elem c "<>=" && not (elem (head cs) ">=") = (TokComp (comparator [c])) : lexer cs
+  -- cases <=, <>
+  | c == '<' && elem (head cs) ">=" = (TokComp (comparator [c, head cs])) : lexer (tail cs)
+  -- case >=
+  | c == '>' && head cs == '=' = (TokComp (comparator [c, head cs])) : lexer (tail cs)
   --
   | otherwise = error ("Invalid character " ++ [c])
 
@@ -154,11 +157,11 @@ parseP (tok : tokens) =
 -- Relation                                                             --
 --------------------------------------------------------------------------
 
-data RelOperator = Less | LessOrEqual | Greater | GreaterOrEqual | Equal | NotEqual
+data Comparator = Less | LessOrEqual | Greater | GreaterOrEqual | Equal | NotEqual
   deriving (Eq)
 
-relOperator :: String -> RelOperator
-relOperator str
+comparator :: String -> Comparator
+comparator str
   | str == "<"  = Less
   | str == "<=" = LessOrEqual
   | str == ">"  = Greater
@@ -166,7 +169,7 @@ relOperator str
   | str == "="  = Equal
   | str == "<>" = NotEqual
 
-instance Show RelOperator where
+instance Show Comparator where
   show Less = "<"
   show LessOrEqual = "<="
   show Greater = ">"
@@ -174,10 +177,10 @@ instance Show RelOperator where
   show Equal = "="
   show NotEqual = "<>"
 
-data Relation = Relation RelOperator Expression Expression
+data Relation = Relation Comparator Expression Expression
 
 instance Show Relation where
-  show (Relation op lhs rhs) = show lhs ++ show op ++ show rhs
+  show (Relation comp lhs rhs) = show lhs ++ show comp ++ show rhs
 
 parseRelation :: String -> Relation
 parseRelation str =
@@ -192,9 +195,9 @@ parseR tokens =
   let (lhs, (tok : toks)) = parseE tokens
   in
     case tok of
-      (TokRel op) ->
+      (TokComp comp) ->
         let (rhs, rest) = parseE toks
-        in ((Relation op lhs rhs), rest)
+        in ((Relation comp lhs rhs), rest)
       _ -> error ("Syntax error: " ++ show tok)
 
 --------------------------------------------------------------------------
@@ -228,7 +231,13 @@ wp :: Assignment -> Expression -> Expression
 wp ass (BinaryNode op lhs rhs) = (BinaryNode op (wp ass lhs) (wp ass rhs))
 wp ass (IntValue n) = (IntValue n)
 wp ass (Constant str) = (Constant str)
-wp (Assign var e) (Variable str) = if (str==var) then e else (Variable str)
+wp (Assign var e) (Variable str) =
+  if str == var
+  then e
+  else (Variable str)
+
+wpRel :: Assignment -> Relation -> Relation
+wpRel ass (Relation op lhs rhs) = (Relation op (wp ass lhs) (wp ass rhs))
 
 wpRel :: Assignment -> Relation -> Relation
 wpRel ass (Relation op lhs rhs) = (Relation op (wp ass lhs) (wp ass rhs))
