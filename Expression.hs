@@ -121,7 +121,7 @@ parseF tokens =
   let (lhs, rest) = parseP tokens
   in parseF' lhs rest
 
--- F' -> ["^" F]
+-- F' -> "^" F
 -- F' -> epsilon
 parseF' :: Expression -> [Token] -> (Expression, [Token])
 parseF' lhs (tok : tokens) =
@@ -252,14 +252,24 @@ parseB' lhs (tok : tokens) =
       in parseB' (BoolBinaryNode op lhs rhs) rest
     _ -> (lhs, (tok : tokens))
 
--- U -> ["!"] R
+-- U -> ["!"] U
+-- U -> "(" B ")"
+-- U -> R
 parseU :: [Token] -> (BoolExpression, [Token])
-parseU ((TokBoolOp Not) : tokens) =
+parseU (tok : tokens) =
   let (exp, rest) = parseU tokens
-  in ((BoolUnaryNode Not exp), rest)
-parseU tokens =
-  let (rel, rest) = parseR tokens
-  in ((BoolRelNode rel), rest)
+  in
+    case tok of
+      (TokBoolOp Not) -> ((BoolUnaryNode Not exp), rest)
+      (TokParen '(') ->
+        let (exp, (next : rest)) = parseB tokens
+        in
+          if next /= (TokParen ')')
+          then error "Missing right parenthesis"
+          else (exp, rest)
+      _ ->
+        let (exp, rest) = parseR (tok : tokens)
+        in ((BoolRelNode exp), rest)
 
 --------------------------------------------------------------------------
 -- Assignment                                                           --
@@ -311,3 +321,44 @@ parseWp assStr expStr =
   let ass = parseAssignment assStr
       exp = parseBoolExpression expStr
   in wp ass exp
+
+--------------------------------------------------------------------------
+-- Simplify                                                             --
+--------------------------------------------------------------------------
+
+pushMinus :: Expression -> Expression
+pushMinus (BinaryNode Minus lhs rhs) = (BinaryNode Plus (pushMinus lhs) (pushMinus rhs))
+pushMinus (BinaryNode op lhs rhs) = (BinaryNode op (pushMinus lhs) (pushMinus rhs))
+pushMinus (UnaryNode Minus exp) = exp
+pushMinus (IntValue n) = (UnaryNode Minus (IntValue n))
+pushMinus (Variable str) = (UnaryNode Minus (Variable str))
+pushMinus (Constant str) = (UnaryNode Minus (Constant str))
+pushMinus exp = exp
+
+evalOperation :: ArithOperator -> Int -> Int -> Expression
+evalOperation op a b
+  | op == Plus = (IntValue (a+b))
+  | op == Minus = (IntValue (a-b))
+  | op == Times = (IntValue (a*b))
+--  | op == Div = (IntValue (a*b))
+--  | op == Mod = (IntValue (a*b))
+--  | op == Exp = (IntValue (a*b))
+
+simplifyExp :: Expression -> Expression
+simplifyExp (BinaryNode Plus (IntValue 0) b) = simplifyExp b
+simplifyExp (BinaryNode Plus a (IntValue 0)) = simplifyExp a
+
+simplifyExp (BinaryNode op (IntValue a) (IntValue b)) = evalOperation op a b
+simplifyExp (BinaryNode op (IntValue a) (UnaryNode Minus (IntValue b))) = evalOperation op a (-b)
+simplifyExp (BinaryNode op (UnaryNode Minus (IntValue a)) (IntValue b)) = evalOperation op (-a) b
+
+simplifyExp (BinaryNode Minus lhs rhs) =
+  let slhs = simplifyExp lhs
+      srhs = simplifyExp (pushMinus rhs)
+  in (BinaryNode Plus slhs srhs)
+simplifyExp (BinaryNode op lhs rhs) =
+  let slhs = simplifyExp lhs
+      srhs = simplifyExp rhs
+  in (BinaryNode op slhs srhs)
+
+simplifyExp exp = exp
