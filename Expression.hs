@@ -68,12 +68,12 @@ data Expression = BinaryNode ArithOperator Expression Expression
 
 instance Show Expression where
   show (IntValue n) = show n
-  show (Variable str) = str -- "[" ++ str ++ "]"
-  show (Constant str) = str -- "{" ++ str ++ "}"
+  show (Variable str) = str
+  show (Constant str) = str
   show (BinaryNode op lhs rhs) = parens lhs ++ (show op) ++ parens rhs
     where parens (BinaryNode op lhs rhs) = "(" ++ show (BinaryNode op lhs rhs) ++ ")"
           parens e = show e
-  show (UnaryNode op exp) = "(" ++ show op ++ show exp ++ ")"
+  show (UnaryNode op exp) = show op ++ "(" ++ show exp ++ ")"
 
 parseExpression :: String -> Expression
 parseExpression str =
@@ -150,7 +150,7 @@ parseP (tok : tokens) =
         then error "Missing right parenthesis"
         else (exp, rest)
     (TokOp Minus) ->
-      let (exp, rest) = parseF tokens
+      let (exp, rest) = parseT tokens
       in ((UnaryNode Minus exp), rest)
     _ -> error ("Syntax Error: " ++ show tok)
 
@@ -202,7 +202,7 @@ parseR tokens =
       _ -> error ("Syntax error: " ++ show tok)
 
 --------------------------------------------------------------------------
--- Boolean expression                                                    --
+-- Boolean expression                                                   --
 --------------------------------------------------------------------------
 
 data BoolOperator = And | Or | Not
@@ -224,7 +224,7 @@ data BoolExpression = BoolBinaryNode BoolOperator BoolExpression BoolExpression
                     | BoolRelNode Relation
 
 instance Show BoolExpression where
-  show (BoolBinaryNode op lhs rhs) = show lhs ++ " " ++ show op ++ " " ++ show rhs
+  show (BoolBinaryNode op lhs rhs) = "(" ++ show lhs ++ " " ++ show op ++ " " ++ show rhs ++ ")"
   show (BoolUnaryNode op rel) = show op ++ "(" ++ show rel ++ ")"
   show (BoolRelNode rel) = show rel
 
@@ -252,24 +252,24 @@ parseB' lhs (tok : tokens) =
       in parseB' (BoolBinaryNode op lhs rhs) rest
     _ -> (lhs, (tok : tokens))
 
--- U -> ["!"] U
+-- U -> "!" U
 -- U -> "(" B ")"
 -- U -> R
 parseU :: [Token] -> (BoolExpression, [Token])
 parseU (tok : tokens) =
-  let (exp, rest) = parseU tokens
-  in
-    case tok of
-      (TokBoolOp Not) -> ((BoolUnaryNode Not exp), rest)
-      (TokParen '(') ->
-        let (exp, (next : rest)) = parseB tokens
-        in
-          if next /= (TokParen ')')
-          then error "Missing right parenthesis"
-          else (exp, rest)
-      _ ->
-        let (exp, rest) = parseR (tok : tokens)
-        in ((BoolRelNode exp), rest)
+  case tok of
+    (TokBoolOp Not) ->
+      let (exp, rest) = parseU tokens
+      in ((BoolUnaryNode Not exp), rest)
+    (TokParen '(') ->
+      let (exp, (next : rest)) = parseB tokens
+      in
+        if next /= (TokParen ')')
+        then error "Missing right parenthesis"
+        else (exp, rest)
+    _ ->
+      let (rel, rest) = parseR (tok : tokens)
+      in ((BoolRelNode rel), rest)
 
 --------------------------------------------------------------------------
 -- Assignment                                                           --
@@ -278,7 +278,7 @@ parseU (tok : tokens) =
 data Assignment = Assign String Expression
 
 instance Show Assignment where
-  show (Assign var exp) = "[" ++ var ++ "]:=" ++ show exp
+  show (Assign var exp) = var ++ ":=" ++ show exp
 
 parseAssignment :: String -> Assignment
 parseAssignment str =
