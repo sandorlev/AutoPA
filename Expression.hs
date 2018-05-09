@@ -1,4 +1,6 @@
 import Data.Char
+import Data.List
+import System.Random
 
 --------------------------------------------------------------------------
 -- Lexer                                                                --
@@ -10,8 +12,9 @@ data Token = TokOp ArithOperator
            | TokParen Char
            | TokVariable String
            | TokConstant String
-           | TokIntValue Int
+           | TokIntValue Integer
            | TokAssign
+           | TokSemiColon
            | TokEnd
   deriving (Eq, Show)
 
@@ -20,6 +23,7 @@ lexer [] = [TokEnd]
 lexer (c : cs)
   | elem c "+-*/%^" = (TokOp (arithOperator c)) : lexer cs
   | elem c "()" = (TokParen c) : lexer cs
+  | c == ';' = TokSemiColon : lexer cs
   | c == ':' && (head cs) == '=' = TokAssign : lexer (tail cs)
   | isLower c = (TokVariable (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
   | isUpper c = (TokConstant (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
@@ -53,16 +57,16 @@ arithOperator c
   | c == '^' = Exp
 
 instance Show ArithOperator where
-  show (Plus)  = "+"
-  show (Minus) = "-"
-  show (Times) = "*"
-  show (Div)   = "/"
-  show (Mod)   = "%"
-  show (Exp)   = "^"
+  show Plus  = "+"
+  show Minus = "-"
+  show Times = "*"
+  show Div   = "/"
+  show Mod   = "%"
+  show Exp   = "^"
 
 data Expression = BinaryNode ArithOperator Expression Expression
                 | UnaryNode ArithOperator Expression
-                | IntValue Int
+                | IntValue Integer
                 | Variable String
                 | Constant String
 
@@ -89,7 +93,7 @@ parseE tokens =
   let (lhs, rest) = parseT tokens
   in parseE' lhs rest
 
--- E' -> ("+" | "-") T
+-- E' -> ("+" | "-") T {E'}
 -- E' -> epsilon
 parseE' :: Expression -> [Token] -> (Expression, [Token])
 parseE' lhs (tok : tokens) =
@@ -133,7 +137,7 @@ parseF' lhs (tok : tokens) =
 
 -- P -> <Var>
 -- P -> <Const>
--- P -> <Int>
+-- P -> <Integer>
 -- P -> "(" E ")"
 -- P -> "-" T
 parseP :: [Token] -> (Expression, [Token])
@@ -236,21 +240,34 @@ parseBoolExpression str =
       TokEnd -> exp
       _ -> error ("Unused tokens: " ++ show (tok : tokens))
 
--- B -> U {B'}
+-- B -> C {B'}
 parseB :: [Token] -> (BoolExpression, [Token])
 parseB tokens =
-  let (lhs, rest) = parseU tokens
+  let (lhs, rest) = parseC tokens
   in parseB' lhs rest
 
--- B' -> ("&" | "|") U
+-- B' -> "|" C {B'}
 -- B' -> epsilon
 parseB' :: BoolExpression -> [Token] -> (BoolExpression, [Token])
-parseB' lhs (tok : tokens) =
-  case tok of
-    (TokBoolOp op) | elem op [And, Or] ->
-      let (rhs, rest) = parseU tokens
-      in parseB' (BoolBinaryNode op lhs rhs) rest
-    _ -> (lhs, (tok : tokens))
+parseB' lhs ((TokBoolOp Or) : tokens) =
+  let (rhs, rest) = parseC tokens
+  in parseB' (BoolBinaryNode Or lhs rhs) rest
+parseB' lhs tokens = (lhs, tokens)
+
+-- C -> U {C'}
+-- C -> epsilon
+parseC :: [Token] -> (BoolExpression, [Token])
+parseC tokens =
+  let (lhs, rest) = parseU tokens
+  in parseC' lhs rest
+
+-- C' -> "&" U {C'}
+-- C' -> epsilon
+parseC' :: BoolExpression -> [Token] -> (BoolExpression, [Token])
+parseC' lhs ((TokBoolOp And) : tokens) =
+  let (rhs, rest) = parseU tokens
+  in (parseC' (BoolBinaryNode And lhs rhs) rest)
+parseC' lhs tokens = (lhs, tokens)
 
 -- U -> "!" U
 -- U -> "(" B ")"
@@ -268,8 +285,8 @@ parseU (tok : tokens) =
         then error "Missing right parenthesis"
         else (exp, rest)
     _ ->
-      let (rel, rest) = parseR (tok : tokens)
-      in ((BoolRelNode rel), rest)
+      let (lhs, rest) = parseR (tok : tokens)
+      in ((BoolRelNode lhs), rest)
 
 --------------------------------------------------------------------------
 -- Assignment                                                           --
@@ -279,6 +296,17 @@ data Assignment = Assign String Expression
 
 instance Show Assignment where
   show (Assign var exp) = var ++ ":=" ++ show exp
+
+acceptSemicolon :: [Token] -> [Token]
+acceptSemicolon (TokSemiColon:xs) = xs
+acceptSemicolon (TokEnd:xs) = (TokEnd:xs)
+acceptSemicolon _ = error "Error: expected semicolon"
+
+parseAssignments :: String -> [Assignment]
+parseAssignments str = parseAs (lexer str)
+  where parseAs [TokEnd] = []
+        parseAs tokens = ass:parseAs (acceptSemicolon toks)
+          where   (ass, toks) = parseA tokens
 
 parseAssignment :: String -> Assignment
 parseAssignment str =
@@ -316,11 +344,15 @@ wp ass (BoolBinaryNode op lhs rhs) = (BoolBinaryNode op (wp ass lhs) (wp ass rhs
 wp ass (BoolUnaryNode op exp) = (BoolUnaryNode op (wp ass exp))
 wp ass (BoolRelNode rel) = (BoolRelNode (wpRel ass rel))
 
+wps :: [Assignment] -> BoolExpression -> BoolExpression
+wps [] e = e
+wps (a:as) e = wp a (wps as e)
+
 parseWp :: String -> String -> BoolExpression
 parseWp assStr expStr =
-  let ass = parseAssignment assStr
+  let ass = parseAssignments assStr
       exp = parseBoolExpression expStr
-  in wp ass exp
+  in wps ass exp
 
 --------------------------------------------------------------------------
 -- Simplify                                                             --
@@ -335,30 +367,117 @@ pushMinus (Variable str) = (UnaryNode Minus (Variable str))
 pushMinus (Constant str) = (UnaryNode Minus (Constant str))
 pushMinus exp = exp
 
-evalOperation :: ArithOperator -> Int -> Int -> Expression
-evalOperation op a b
-  | op == Plus = (IntValue (a+b))
-  | op == Minus = (IntValue (a-b))
-  | op == Times = (IntValue (a*b))
---  | op == Div = (IntValue (a*b))
---  | op == Mod = (IntValue (a*b))
---  | op == Exp = (IntValue (a*b))
+--simplifyExp :: Expression -> Expression
+--simplifyExp (BinaryNode Plus (IntValue 0) b) = simplifyExp b
+--simplifyExp (BinaryNode Plus a (IntValue 0)) = simplifyExp a
+--
+--simplifyExp (BinaryNode op (IntValue a) (IntValue b)) = evalOperation op a b
+--simplifyExp (BinaryNode op (IntValue a) (UnaryNode Minus (IntValue b))) = evalOperation op a (-b)
+--simplifyExp (BinaryNode op (UnaryNode Minus (IntValue a)) (IntValue b)) = evalOperation op (-a) b
+--
+--simplifyExp (BinaryNode Minus lhs rhs) =
+--  let slhs = simplifyExp lhs
+--      srhs = simplifyExp (pushMinus rhs)
+--  in (BinaryNode Plus slhs srhs)
+--simplifyExp (BinaryNode op lhs rhs) =
+--  let slhs = simplifyExp lhs
+--      srhs = simplifyExp rhs
+--  in (BinaryNode op slhs srhs)
 
-simplifyExp :: Expression -> Expression
-simplifyExp (BinaryNode Plus (IntValue 0) b) = simplifyExp b
-simplifyExp (BinaryNode Plus a (IntValue 0)) = simplifyExp a
+addIfMissing :: String -> [String] -> [String]
+addIfMissing str strs =
+  if elem str strs then
+    strs
+  else
+    (str : strs)
 
-simplifyExp (BinaryNode op (IntValue a) (IntValue b)) = evalOperation op a b
-simplifyExp (BinaryNode op (IntValue a) (UnaryNode Minus (IntValue b))) = evalOperation op a (-b)
-simplifyExp (BinaryNode op (UnaryNode Minus (IntValue a)) (IntValue b)) = evalOperation op (-a) b
+listExpIdentifiers :: Expression -> ([String], [String])
+listExpIdentifiers exp =
+  let (vars, consts) = listExpIdentifiers' exp [] []
+  in (sort vars, sort consts)
 
-simplifyExp (BinaryNode Minus lhs rhs) =
-  let slhs = simplifyExp lhs
-      srhs = simplifyExp (pushMinus rhs)
-  in (BinaryNode Plus slhs srhs)
-simplifyExp (BinaryNode op lhs rhs) =
-  let slhs = simplifyExp lhs
-      srhs = simplifyExp rhs
-  in (BinaryNode op slhs srhs)
+listExpIdentifiers' :: Expression -> [String] -> [String] -> ([String], [String])
+listExpIdentifiers' (UnaryNode op exp) vars consts =
+  let (v, c) = (listExpIdentifiers' exp) vars consts
+  in (v, c)
+listExpIdentifiers' (BinaryNode op lhs rhs) vars consts =
+  let (v, c) = (listExpIdentifiers' lhs vars consts)
+  in listExpIdentifiers' rhs v c
+listExpIdentifiers' exp vars consts =
+  case exp of
+    (Variable var) -> ((addIfMissing var vars), consts)
+    (Constant const) -> (vars, (addIfMissing const consts))
+    _ -> (vars, consts)
 
-simplifyExp exp = exp
+randomList :: Int -> Int -> Int -> [Int]
+randomList length lwb upb = take length rlist
+  where
+    rlist = map (\x -> x `mod` (upb+1-lwb) + lwb) rl
+    rl = map fst $ scanl (\(r, gen) _ -> random gen) (random (mkStdGen 1)) $ repeat ()
+
+type Valuation = (String, Integer)
+
+getValue :: String -> [Valuation] -> Maybe Integer
+getValue str [] = Nothing
+getValue str ((s,v):vals) = if str == s then Just v else getValue str vals
+
+setValue :: String -> Integer -> [Valuation] -> [Valuation]
+setValue str n [] = [(str,n)]
+setValue str n ((s,o):vals) = if str == s then ((s,n):vals) else ((s,o):(setValue str n vals))
+
+evaluateExpression :: Expression -> [Valuation] -> Integer
+evaluateExpression (IntValue n) _ = n
+evaluateExpression (Variable str) vals =
+  case getValue str vals of
+    Just v -> v
+    Nothing -> error ("Undefined variable: " ++ str)
+evaluateExpression (Constant str) vals =
+  case getValue str vals of
+    Just v -> v
+    Nothing -> error ("Undefined constant: " ++ str)
+evaluateExpression (UnaryNode Minus exp) vals = evaluateExpression (pushMinus exp) vals
+evaluateExpression (BinaryNode op lhs rhs) vals =
+  let (lh,rh)=(evaluateExpression lhs vals,evaluateExpression rhs vals) in
+  case op of
+    Plus -> lh + rh
+    Minus -> lh - rh
+    Times -> lh * rh
+    Div -> div lh rh
+    Mod -> mod lh rh
+    Exp -> lh ^ rh
+
+simulateStep :: Assignment -> [Valuation] -> [Valuation]
+simulateStep (Assign var exp) vals = setValue var (evaluateExpression exp vals) vals
+
+simulate :: [Assignment] -> [Valuation] -> [Valuation]
+simulate [] vals = vals
+simulate (a:as) vals = simulate as (simulateStep a vals)
+
+runSimulation :: String -> [Valuation] -> [Valuation]
+runSimulation s vals = simulate (parseAssignments s) vals
+
+evaluateRelation :: Relation -> [Valuation] -> Bool
+evaluateRelation (Relation comp lhs rhs) vals =
+  let (lh, rh) = (evaluateExpression lhs vals, evaluateExpression rhs vals)
+  in
+    case comp of
+      Less -> lh < rh
+      LessOrEqual -> lh <= rh
+      Greater -> lh > rh
+      GreaterOrEqual -> lh >= rh
+      Equal -> lh == rh
+      NotEqual -> lh /= rh
+
+evaluateBoolExpression :: BoolExpression -> [Valuation] -> Bool
+evaluateBoolExpression (BoolBinaryNode op lhs rhs) vals =
+  let (lh, rh) = (evaluateBoolExpression lhs vals, evaluateBoolExpression rhs vals)
+  in
+    case op of
+      And -> lh && rh
+      Or -> lh || rh
+evaluateBoolExpression (BoolUnaryNode Not exp) vals = not (evaluateBoolExpression exp vals)
+evaluateBoolExpression (BoolRelNode rel) vals = evaluateRelation rel vals
+
+checkHoareTriple :: [Valuation] -> String -> String -> Bool
+checkHoareTriple vals assStr expStr =
+  evaluateBoolExpression (parseBoolExpression expStr) (runSimulation assStr vals)
