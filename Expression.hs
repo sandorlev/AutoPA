@@ -21,23 +21,23 @@ data Token = TokOp ArithOperator
 lexer :: String -> [Token]
 lexer [] = [TokEnd]
 lexer (c : cs)
-  | elem c "+-*/%^" = (TokOp (arithOperator c)) : lexer cs
-  | elem c "()" = (TokParen c) : lexer cs
+  | elem c "+-*/%^" = TokOp (arithOperator c) : lexer cs
+  | elem c "()" = TokParen c : lexer cs
   | c == ';' = TokSemiColon : lexer cs
-  | c == ':' && (head cs) == '=' = TokAssign : lexer (tail cs)
-  | isLower c = (TokVariable (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
-  | isUpper c = (TokConstant (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
-  | isDigit c = (TokIntValue (read (c : takeWhile isDigit cs))) : lexer (dropWhile isDigit cs)
+  | c == ':' && head cs == '=' = TokAssign : lexer (tail cs)
+  | isLower c = TokVariable (c : takeWhile isAlpha cs) : lexer (dropWhile isAlpha cs)
+  | isUpper c = TokConstant (c : takeWhile isAlpha cs) : lexer (dropWhile isAlpha cs)
+  | isDigit c = TokIntValue (read (c : takeWhile isDigit cs)) : lexer (dropWhile isDigit cs)
   | isSpace c = lexer (dropWhile isSpace cs)
-  -- ugly comparators
+  -- comparators
   -- cases <, >, =
-  | elem c "<>=" && not (elem (head cs) ">=") = (TokComp (comparator [c])) : lexer cs
+  | elem c "<>=" && not (elem (head cs) ">=") = TokComp (comparator [c]) : lexer cs
   -- cases <=, <>
-  | c == '<' && elem (head cs) ">=" = (TokComp (comparator [c, head cs])) : lexer (tail cs)
+  | c == '<' && elem (head cs) ">=" = TokComp (comparator [c, head cs]) : lexer (tail cs)
   -- case >=
-  | c == '>' && head cs == '=' = (TokComp (comparator [c, head cs])) : lexer (tail cs)
+  | c == '>' && head cs == '=' = TokComp (comparator ">=") : lexer (tail cs)
   -- binary operators
-  | elem c "&|!" = (TokBoolOp (boolOperator c)) : lexer cs
+  | elem c "&|!" = TokBoolOp (boolOperator c) : lexer cs
   | otherwise = error ("Invalid character " ++ [c])
 
 --------------------------------------------------------------------------
@@ -359,30 +359,17 @@ parseWp assStr expStr =
 --------------------------------------------------------------------------
 
 pushMinus :: Expression -> Expression
-pushMinus (BinaryNode Minus lhs rhs) = (BinaryNode Plus (pushMinus lhs) (pushMinus rhs))
-pushMinus (BinaryNode op lhs rhs) = (BinaryNode op (pushMinus lhs) (pushMinus rhs))
 pushMinus (UnaryNode Minus exp) = exp
-pushMinus (IntValue n) = (UnaryNode Minus (IntValue n))
-pushMinus (Variable str) = (UnaryNode Minus (Variable str))
-pushMinus (Constant str) = (UnaryNode Minus (Constant str))
+pushMinus (IntValue n) = UnaryNode Minus (IntValue n)
+pushMinus (Variable str) = UnaryNode Minus (Variable str)
+pushMinus (Constant str) = UnaryNode Minus (Constant str)
+pushMinus (BinaryNode op lhs rhs)
+  | elem op [Plus, Minus] = BinaryNode op lhs' rhs'
+  | elem op [Times, Div, Exp] = BinaryNode op lhs' rhs
+  | otherwise = error ("Operation " ++ show op ++ " not defined in pushMinus")
+  where lhs' = pushMinus lhs
+        rhs' = pushMinus rhs
 pushMinus exp = exp
-
---simplifyExp :: Expression -> Expression
---simplifyExp (BinaryNode Plus (IntValue 0) b) = simplifyExp b
---simplifyExp (BinaryNode Plus a (IntValue 0)) = simplifyExp a
---
---simplifyExp (BinaryNode op (IntValue a) (IntValue b)) = evalOperation op a b
---simplifyExp (BinaryNode op (IntValue a) (UnaryNode Minus (IntValue b))) = evalOperation op a (-b)
---simplifyExp (BinaryNode op (UnaryNode Minus (IntValue a)) (IntValue b)) = evalOperation op (-a) b
---
---simplifyExp (BinaryNode Minus lhs rhs) =
---  let slhs = simplifyExp lhs
---      srhs = simplifyExp (pushMinus rhs)
---  in (BinaryNode Plus slhs srhs)
---simplifyExp (BinaryNode op lhs rhs) =
---  let slhs = simplifyExp lhs
---      srhs = simplifyExp rhs
---  in (BinaryNode op slhs srhs)
 
 addIfMissing :: String -> [String] -> [String]
 addIfMissing str strs =
@@ -425,6 +412,21 @@ setValue :: String -> Integer -> [Valuation] -> [Valuation]
 setValue str n [] = [(str,n)]
 setValue str n ((s,o):vals) = if str == s then ((s,n):vals) else ((s,o):(setValue str n vals))
 
+popValue :: String -> [Valuation] -> [Valuation]
+popValue str [] = []
+popValue str ((s,o):vals) = if str == s then vals else ((s,o):popValue str vals)
+
+sumValuations :: [Valuation] -> [Valuation] -> [Valuation]
+sumValuations [] bs = bs
+sumValuations (v:as) bs = sumValuations as (sumValuations' v bs)
+
+sumValuations' :: Valuation -> [Valuation] -> [Valuation]
+sumValuations' (str,n) [] = [(str,n)]
+sumValuations' (str,n) ((s,o):vals) =
+  if str == s
+    then ((s, n+o):vals)
+    else sumValuations' (str,n) vals
+
 evaluateExpression :: Expression -> [Valuation] -> Integer
 evaluateExpression (IntValue n) _ = n
 evaluateExpression (Variable str) vals =
@@ -437,14 +439,15 @@ evaluateExpression (Constant str) vals =
     Nothing -> error ("Undefined constant: " ++ str)
 evaluateExpression (UnaryNode Minus exp) vals = evaluateExpression (pushMinus exp) vals
 evaluateExpression (BinaryNode op lhs rhs) vals =
-  let (lh,rh)=(evaluateExpression lhs vals,evaluateExpression rhs vals) in
-  case op of
-    Plus -> lh + rh
-    Minus -> lh - rh
-    Times -> lh * rh
-    Div -> div lh rh
-    Mod -> mod lh rh
-    Exp -> lh ^ rh
+  let (lh, rh) = (evaluateExpression lhs vals, evaluateExpression rhs vals)
+  in
+    case op of
+      Plus -> lh + rh
+      Minus -> lh - rh
+      Times -> lh * rh
+      Div -> div lh rh
+      Mod -> mod lh rh
+      Exp -> lh ^ rh
 
 simulateStep :: Assignment -> [Valuation] -> [Valuation]
 simulateStep (Assign var exp) vals = setValue var (evaluateExpression exp vals) vals
@@ -481,3 +484,182 @@ evaluateBoolExpression (BoolRelNode rel) vals = evaluateRelation rel vals
 checkHoareTriple :: [Valuation] -> String -> String -> Bool
 checkHoareTriple vals assStr expStr =
   evaluateBoolExpression (parseBoolExpression expStr) (runSimulation assStr vals)
+
+-- SIMPLIFICATION
+
+--instance Eq Expression where
+--  _ = True
+
+instance Eq Expression where
+  (BinaryNode op1 lhs1 rhs1) == (BinaryNode op2 lhs2 rhs2) =
+    op1 == op2 && lhs1 == lhs2 && rhs1 == rhs2
+  (UnaryNode op1 exp1) == (UnaryNode op2 exp2) = op1 == op2 && exp1 == exp2
+  (IntValue a) == (IntValue b) = a == b
+  (Variable a) == (Variable b) = a == b
+  (Constant a) == (Constant b) = a == b
+  _ == _ = False
+
+-- Int -> Unary -> Var -> Const -> Binary
+instance Ord Expression where
+  (BinaryNode op lhs rhs) > _ = True
+  _ > (BinaryNode op lhs rhs) = False
+
+  (UnaryNode Minus a) > (UnaryNode Minus b) = a > b
+  (UnaryNode Minus a) > b = a > b
+  a > (UnaryNode Minus b) = a > b
+
+  (IntValue a) > (IntValue b) = a > b
+  (IntValue a) > _ = False
+  _ > (IntValue n) = True
+
+  (Variable a) > (Variable b) = a > b
+  (Variable a) > _ = False
+  _ > (Variable b) = True
+
+  (Constant a) > (Constant b) = a > b
+
+  a >= b = a > b || a == b
+  a <= b = not (a > b)
+  a < b = not (a == b) && a <= b
+
+--data Expression = BinaryNode ArithOperator Expression Expression
+--                | UnaryNode ArithOperator Expression
+--                | IntValue Integer
+--                | Variable String
+--                | Constant String
+
+normalize :: Expression -> Expression
+normalize (BinaryNode Minus lhs rhs) =
+  let (lhs', rhs') = (normalize lhs, pushMinus (normalize rhs))
+  in BinaryNode Plus lhs' rhs'
+normalize (BinaryNode op lhs rhs) =
+  let (lhs', rhs') = (normalize lhs, normalize rhs)
+  in BinaryNode op lhs' rhs'
+normalize (UnaryNode Minus exp) = pushMinus (normalize exp)
+normalize exp = exp
+
+normalizeRel :: Relation -> Relation
+normalizeRel (Relation comp lhs rhs) = Relation comp (normalize lhs) (normalize rhs)
+
+normalizeBoolExp :: BoolExpression -> BoolExpression
+normalizeBoolExp (BoolRelNode rel) = BoolRelNode (normalizeRel rel)
+normalizeBoolExp (BoolUnaryNode op exp) = BoolUnaryNode op (normalizeBoolExp exp)
+normalizeBoolExp (BoolBinaryNode op lhs rhs) = BoolBinaryNode op (normalizeBoolExp lhs) (normalizeBoolExp rhs)
+
+reduceExp :: Expression -> String -> Integer -> Expression
+reduceExp (Variable v) var val = if v == var then IntValue val else Variable v
+reduceExp (Constant c) var val = if c == var then IntValue val else Constant c
+reduceExp (UnaryNode op exp) var val = UnaryNode op (reduceExp exp var val)
+reduceExp (BinaryNode op lhs rhs) var val = BinaryNode op (reduceExp lhs var val) (reduceExp rhs var val)
+reduceExp exp var val = exp
+
+reduceRel :: Relation -> String -> Integer -> Relation
+reduceRel (Relation comp lhs rhs) var val =
+  Relation comp (reduceExp lhs var val) (reduceExp rhs var val)
+
+reduceBoolExp :: BoolExpression -> String -> Integer -> BoolExpression
+reduceBoolExp (BoolRelNode rel) var val = BoolRelNode (reduceRel rel var val)
+reduceBoolExp (BoolUnaryNode op exp) var val = BoolUnaryNode op (reduceBoolExp exp var val)
+reduceBoolExp (BoolBinaryNode op lhs rhs) var val =
+  BoolBinaryNode op (reduceBoolExp lhs var val) (reduceBoolExp rhs var val)
+
+expressionToTerms :: Expression -> [Expression]
+expressionToTerms (BinaryNode Plus lhs rhs) =
+  let (lhs', rhs') = (expressionToTerms lhs, expressionToTerms rhs)
+  in lhs' ++ rhs'
+expressionToTerms exp = [exp]
+
+incIdentifier :: String -> Integer -> [Valuation] -> [Valuation]
+incIdentifier str val vals =
+  case getValue str vals of
+    Just n ->
+      if n + val == 0
+        then popValue str vals
+        else setValue str (n+val) vals
+    Nothing -> setValue str val vals
+
+evalTerms :: [Expression] -> ([Valuation], [Valuation], Integer, [Expression])
+evalTerms [] = ([], [], 0, [])
+evalTerms ((IntValue n):ts) =
+  let (vars, consts, value, rest) = evalTerms ts
+  in (vars, consts, value + n, rest)
+evalTerms ((UnaryNode Minus (IntValue n)):ts) =
+  let (vars, consts, value, rest) = evalTerms ts
+  in (vars, consts, value - n, rest)
+evalTerms ((Variable var):ts) =
+  let (vars, consts, value, rest) = evalTerms ts
+  in ((incIdentifier var 1 vars), consts, value, rest)
+evalTerms ((UnaryNode Minus (Variable var)):ts) =
+  let (vars, consts, value, rest) = evalTerms ts
+  in ((incIdentifier var (-1) vars), consts, value, rest)
+evalTerms ((Constant const):ts) =
+  let (vars, consts, value, rest) = evalTerms ts
+  in (vars, (incIdentifier const 1 consts), value, rest)
+evalTerms ((UnaryNode Minus (Constant const)):ts) =
+  let (vars, consts, value, rest) = evalTerms ts
+  in (vars, (incIdentifier const (-1) consts), value, rest)
+evalTerms ((BinaryNode Times lhs rhs):ts) =
+  let (vars, consts, value, rest) = evalTerms ts
+  in
+    let (vars1, consts1, value1, rest1) = evalTerms (expressionToTerms lhs)
+        (vars2, consts2, value2, rest2) = evalTerms (expressionToTerms rhs)
+    in
+      if True then error $ show value2
+      else (vars, consts, value, rest)
+    --in (sumValuations vars (sumValuations vars1 vars2),
+    --    sumValuations consts (sumValuations consts1 consts2),
+    --    value + value1 + value2,
+    --    rest ++ rest1 ++ rest2)
+evalTerms (t:ts) =
+  let (vars, consts, value, rest) = evalTerms ts
+  in (vars, consts, value, rest ++ [t])
+
+--sortTerms (a:b:ts) = (
+
+-- reorder (BinaryNode Plus lhs rhs) =
+--   let (lhs', rhs') = (reorder lhs, reorder rhs)
+--   in
+--     case lhs of
+--       IntValue a -> BinaryNode Plus lhs' rhs'
+--       UnaryNode Minus exp ->
+--         case rhs of
+--           IntValue b -> BinaryNode Plus rhs' lhs'
+--           _ -> BinaryNode Plus lhs' rhs'
+--       Variable a ->
+--         case rhs of
+--           IntValue b -> (BinaryNode Plus rhs' lhs')
+--           UnaryNode Minus exp -> (BinaryNode Plus rhs' lhs')
+--           Variable b ->
+--             if a > b then (BinaryNode Plus rhs' lhs')
+--             else (BinaryNode Plus lhs' rhs')
+--           _ -> (BinaryNode Plus lhs' rhs')
+--       Constant a ->
+--         case rhs of
+--           IntValue b -> (BinaryNode Plus rhs' lhs')
+--           UnaryNode Minus exp -> (BinaryNode Plus rhs' lhs')
+--           Variable b -> (BinaryNode Plus rhs' lhs')
+--           Constant b ->
+--             if a > b then (BinaryNode Plus rhs' lhs')
+--             else (BinaryNode Plus lhs' rhs')
+--           _ -> (BinaryNode Plus lhs' rhs')
+--       _ ->
+--        case rhs of
+--          IntValue b -> (BinaryNode Plus rhs' lhs')
+--          _ -> (BinaryNode Plus lhs' rhs')
+--reorder exp = exp
+
+simplify :: Expression -> Expression
+--simplify (BinaryNode Plus (IntValue a
+--
+--simplify (BinaryNode Plus lhs rhs) =
+--  case lhs of
+--    (IntValue a) ->
+--      case rhs of
+--        (IntValue b) -> IntValue (a + b)
+--        _ -> (BinaryNode Plus lhs rhs)
+--    (UnaryNode Minus a) ->
+--      case rhs of
+--        (IntValue b) -> IntValue (b - a)
+--        _ -> (BinaryNode Plus lhs rhs)
+--    _ -> (BinaryNode Plus lhs rhs)
+simplify exp = exp
