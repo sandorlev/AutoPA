@@ -329,12 +329,11 @@ parseA (tok : _) = error ("Syntax error: " ++ show tok)
 wpExp :: Assignment -> Expression -> Expression
 wpExp ass (BinaryNode op lhs rhs) = (BinaryNode op (wpExp ass lhs) (wpExp ass rhs))
 wpExp ass (UnaryNode op exp) = (UnaryNode op (wpExp ass exp))
-wpExp ass (IntValue n) = (IntValue n)
-wpExp ass (Constant str) = (Constant str)
 wpExp (Assign var e) (Variable str) =
   if str == var
   then e
   else (Variable str)
+wpExp ass exp = exp
 
 wpRel :: Assignment -> Relation -> Relation
 wpRel ass (Relation op lhs rhs) = (Relation op (wpExp ass lhs) (wpExp ass rhs))
@@ -522,12 +521,6 @@ instance Ord Expression where
   a <= b = not (a > b)
   a < b = not (a == b) && a <= b
 
---data Expression = BinaryNode ArithOperator Expression Expression
---                | UnaryNode ArithOperator Expression
---                | IntValue Integer
---                | Variable String
---                | Constant String
-
 normalize :: Expression -> Expression
 normalize (BinaryNode Minus lhs rhs) =
   let (lhs', rhs') = (normalize lhs, pushMinus (normalize rhs))
@@ -569,7 +562,81 @@ expressionToTerms (BinaryNode Plus lhs rhs) =
   in lhs' ++ rhs'
 expressionToTerms exp = [exp]
 
-incIdentifier :: String -> Integer -> [Valuation] -> [Valuation]
+reorderEq :: Relation -> Expression
+reorderEq (Relation Equal lhs rhs) = normalize (BinaryNode Plus lhs (pushMinus rhs))
+reorderEq _ = error "not implemented yet"
+
+relationToTerms :: Relation -> [Expression]
+relationToTerms rel = expressionToTerms (reorderEq rel)
+
+type Pair = (String, Integer)
+--type Term = (Integer, String)
+
+data Term = Term Integer String
+
+instance Show Term where
+  show (Term val var) = "(" ++ show val ++ ", " ++ show var ++ ")"
+
+incTerm :: String -> Integer -> [Term] -> [Term]
+incTerm var val ((Term v s):rest) = if var == s then ((Term (v+val) s):rest) else ((Term v s):(incTerm var val rest))
+incTerm var val [] = [(Term val var)]
+
+evTerms :: [Expression] -> [Term] -> ([Term], [Expression])
+evTerms [] terms = (terms, [])
+evTerms ((Constant const):rest) terms = 
+  let terms' = incTerm const 1 terms
+  in evTerms rest terms'
+evTerms ((Variable var):rest) terms =
+  let terms' = incTerm var 1 terms
+  in evTerms rest terms'
+evTerms ((IntValue n):rest) terms =
+  let terms' = incTerm (show n) 1 terms
+  in evTerms rest terms'
+evTerms (e:es) terms =
+  let (ts', rest) = evTerms es terms
+  in (ts', rest ++ [e])
+
+
+--data Expression = BinaryNode ArithOperator Expression Expression
+--                | UnaryNode ArithOperator Expression
+--                | IntValue Integer
+--                | Variable String
+--                | Constant String
+
+
+data BoolExp2 = BoolBinNode2 BoolOperator BoolExpression BoolExpression
+              | BoolClause [BoolExp2]
+              | BoolSomething [Expression]
+              | BoolResult ([Pair], [Pair], Integer, [Expression])
+
+instance Show BoolExp2 where
+  show (BoolBinNode2 op lhs rhs) = show lhs ++ show op ++ show rhs
+  show (BoolClause (exp:[])) = show exp
+  show (BoolClause (exp:exps)) = show exp ++ " & " ++ show exps
+  show (BoolSomething (exp:exps)) = show exp ++ show exps
+  show (BoolResult s) = show s
+
+boolExpToTerms :: BoolExpression -> [BoolExp2]
+boolExpToTerms (BoolBinaryNode And lhs rhs) =
+  let (lhs', rhs') = (boolExpToTerms lhs, boolExpToTerms rhs)
+  in [BoolClause (lhs' ++ rhs')]
+boolExpToTerms (BoolBinaryNode Or lhs rhs) =
+  let (lhs', rhs') = (boolExpToTerms lhs, boolExpToTerms rhs)
+  in [BoolClause lhs', BoolClause rhs']
+boolExpToTerms (BoolRelNode rel) = [BoolSomething (relationToTerms rel)]
+
+evalBoolExp2 :: [BoolExp2] -> [BoolExp2]
+evalBoolExp2 [] = []
+evalBoolExp2 ((BoolSomething terms) : rest) = [BoolResult (evalTerms terms)] ++ (evalBoolExp2 rest)
+evalBoolExp2 ((BoolClause exps) : rest) = (evalBoolExp2 exps) ++ (evalBoolExp2 rest)
+evalBoolExp2 ((BoolBinNode2 op lhs rhs) : rest) = error "kaka"
+
+
+--data BoolExpression = BoolBinaryNode BoolOperator BoolExpression BoolExpression
+--                    | BoolUnaryNode BoolOperator BoolExpression
+--                    | BoolRelNode Relation
+
+incIdentifier :: String -> Integer -> [Pair] -> [Pair]
 incIdentifier str val vals =
   case getValue str vals of
     Just n ->
@@ -578,7 +645,7 @@ incIdentifier str val vals =
         else setValue str (n+val) vals
     Nothing -> setValue str val vals
 
-evalTerms :: [Expression] -> ([Valuation], [Valuation], Integer, [Expression])
+evalTerms :: [Expression] -> ([Pair], [Pair], Integer, [Expression])
 evalTerms [] = ([], [], 0, [])
 evalTerms ((IntValue n):ts) =
   let (vars, consts, value, rest) = evalTerms ts
@@ -598,18 +665,18 @@ evalTerms ((Constant const):ts) =
 evalTerms ((UnaryNode Minus (Constant const)):ts) =
   let (vars, consts, value, rest) = evalTerms ts
   in (vars, (incIdentifier const (-1) consts), value, rest)
-evalTerms ((BinaryNode Times lhs rhs):ts) =
-  let (vars, consts, value, rest) = evalTerms ts
-  in
-    let (vars1, consts1, value1, rest1) = evalTerms (expressionToTerms lhs)
-        (vars2, consts2, value2, rest2) = evalTerms (expressionToTerms rhs)
-    in
-      if True then error $ show value2
-      else (vars, consts, value, rest)
-    --in (sumValuations vars (sumValuations vars1 vars2),
-    --    sumValuations consts (sumValuations consts1 consts2),
-    --    value + value1 + value2,
-    --    rest ++ rest1 ++ rest2)
+--evalTerms ((BinaryNode Times lhs rhs):ts) =
+--  let (vars, consts, value, rest) = evalTerms ts
+--  in
+--    let (vars1, consts1, value1, rest1) = evalTerms (expressionToTerms lhs)
+--        (vars2, consts2, value2, rest2) = evalTerms (expressionToTerms rhs)
+--    in
+--      if True then error $ show value2
+--      else (vars, consts, value, rest)
+--    --in (sumValuations vars (sumValuations vars1 vars2),
+--    --    sumValuations consts (sumValuations consts1 consts2),
+--    --    value + value1 + value2,
+--    --    rest ++ rest1 ++ rest2)
 evalTerms (t:ts) =
   let (vars, consts, value, rest) = evalTerms ts
   in (vars, consts, value, rest ++ [t])
