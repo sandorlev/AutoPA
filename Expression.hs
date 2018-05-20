@@ -66,15 +66,15 @@ lexer (c : cs)
   | otherwise = error ("Invalid character " ++ [c])
 
 --------------------------------------------------------------------------
--- ArithExpression                                                           --
+-- ArithExpression                                                      --
 --------------------------------------------------------------------------
 
-data ArithExpression = Plus ArithExpression ArithExpression
-                     | Minus ArithExpression ArithExpression
-                     | Times ArithExpression ArithExpression
-                     | Div ArithExpression ArithExpression
-                     | Mod ArithExpression ArithExpression
-                     | Exp ArithExpression ArithExpression
+data ArithExpression = ArithExpression :+: ArithExpression
+                     | ArithExpression :-: ArithExpression
+                     | ArithExpression :*: ArithExpression
+                     | ArithExpression :/: ArithExpression
+                     | ArithExpression :%: ArithExpression
+                     | ArithExpression :^: ArithExpression
                      | UnaryMinus ArithExpression
                      | IntValue Integer
                      | Variable String
@@ -87,12 +87,12 @@ parens (Constant str) = str
 parens exp = "(" ++ show exp ++ ")"
 
 instance Show ArithExpression where
-  show (Plus lhs rhs) = parens lhs ++ "+" ++ parens rhs
-  show (Minus lhs rhs) = parens lhs ++ "-" ++ parens rhs
-  show (Times lhs rhs) = parens lhs ++ "*" ++ parens rhs
-  show (Div lhs rhs) = parens lhs ++ "/" ++ parens rhs
-  show (Mod lhs rhs) = parens lhs ++ "%" ++ parens rhs
-  show (Exp lhs rhs) = parens lhs ++ "^" ++ parens rhs
+  show (lhs :+: rhs) = parens lhs ++ "+" ++ parens rhs
+  show (lhs :-: rhs) = parens lhs ++ "-" ++ parens rhs
+  show (lhs :*: rhs) = parens lhs ++ "*" ++ parens rhs
+  show (lhs :/: rhs) = parens lhs ++ "/" ++ parens rhs
+  show (lhs :%: rhs) = parens lhs ++ "%" ++ parens rhs
+  show (lhs :^: rhs) = parens lhs ++ "^" ++ parens rhs
   show (UnaryMinus exp) = "-" ++ parens exp
   show exp = parens exp
 
@@ -117,8 +117,8 @@ parseE' lhs (tok : tokens) =
   let (rhs, rest) = parseT tokens
   in
     case tok of
-      TokPlus -> parseE' (Plus lhs rhs) rest
-      TokMinus -> parseE' (Minus lhs rhs) rest
+      TokPlus -> parseE' (lhs :+: rhs) rest
+      TokMinus -> parseE' (lhs :-: rhs) rest
       _ -> (lhs, (tok : tokens))
 
 -- T -> F {T'}
@@ -134,9 +134,9 @@ parseT' lhs (tok : tokens) =
   let (rhs, rest) = parseF tokens
   in
     case tok of
-      TokTimes -> parseT' (Times lhs rhs) rest
-      TokDiv -> parseT' (Div lhs rhs) rest
-      TokMod -> parseT' (Mod lhs rhs) rest
+      TokTimes -> parseT' (lhs :*: rhs) rest
+      TokDiv -> parseT' (lhs :/: rhs) rest
+      TokMod -> parseT' (lhs :%: rhs) rest
       _ -> (lhs, (tok : tokens))
 
 -- F -> P {F'}
@@ -152,7 +152,7 @@ parseF' lhs (tok : tokens) =
   case tok of
     TokExp ->
       let (rhs, rest) = parseF tokens
-      in ((Exp lhs rhs), rest)
+      in ((lhs :^: rhs), rest)
     _ -> (lhs, (tok : tokens))
 
 -- P -> <Var>
@@ -223,21 +223,21 @@ parseR tokens =
 -- Boolean expression                                                   --
 --------------------------------------------------------------------------
 
-data BoolExpression = And BoolExpression BoolExpression
-                    | Or BoolExpression BoolExpression
-                    | Implies BoolExpression BoolExpression
-                    | Follows BoolExpression BoolExpression
-                    | Equiv BoolExpression BoolExpression
+data BoolExpression = BoolExpression :&: BoolExpression
+                    | BoolExpression :|: BoolExpression
+                    | BoolExpression :->: BoolExpression
+                    | BoolExpression :<-: BoolExpression
+                    | BoolExpression :==: BoolExpression
                     | Not BoolExpression
                     | BoolConst Bool
                     | Compare Relation
 
 instance Show BoolExpression where
-  show (And lhs rhs) = "(" ++ show lhs ++ " & " ++ show rhs ++ ")"
-  show (Or lhs rhs) = "(" ++ show lhs ++ " | " ++ show rhs ++ ")"
-  show (Implies lhs rhs) = "(" ++ show lhs ++ " -> " ++ show rhs ++ ")"
-  show (Follows lhs rhs) = "(" ++ show lhs ++ " <- " ++ show rhs ++ ")"
-  show (Equiv lhs rhs) = "(" ++ show lhs ++ " == " ++ show rhs ++ ")"
+  show (lhs :&: rhs) = "(" ++ show lhs ++ " & " ++ show rhs ++ ")"
+  show (lhs :|: rhs) = "(" ++ show lhs ++ " | " ++ show rhs ++ ")"
+  show (lhs :->: rhs) = "(" ++ show lhs ++ " -> " ++ show rhs ++ ")"
+  show (lhs :<-: rhs) = "(" ++ show lhs ++ " <- " ++ show rhs ++ ")"
+  show (lhs :==: rhs) = "(" ++ show lhs ++ " == " ++ show rhs ++ ")"
   show (Not e) = "~(" ++ show e ++ ")"
   show (BoolConst val) = show val
   show (Compare rel) = show rel
@@ -265,9 +265,9 @@ parseI' lhs (tok : tokens) =
   let (rhs, rest) = parseB tokens
   in
     case tok of
-      TokImplies -> parseI' (Implies lhs rhs) rest
-      TokFollows -> parseI' (Follows lhs rhs) rest
-      TokEquiv -> parseI' (Equiv lhs rhs) rest
+      TokImplies -> parseI' (lhs :->: rhs) rest
+      TokFollows -> parseI' (lhs :<-: rhs) rest
+      TokEquiv -> parseI' (lhs :==: rhs) rest
       _ -> (lhs, (tok : tokens))
 
 -- B -> C {B'}
@@ -281,7 +281,7 @@ parseB tokens =
 parseB' :: BoolExpression -> [Token] -> (BoolExpression, [Token])
 parseB' lhs (TokOr : tokens) =
   let (rhs, rest) = parseC tokens
-  in parseB' (Or lhs rhs) rest
+  in parseB' (lhs :|: rhs) rest
 parseB' lhs tokens = (lhs, tokens)
 
 -- C -> U {C'}
@@ -296,7 +296,7 @@ parseC tokens =
 parseC' :: BoolExpression -> [Token] -> (BoolExpression, [Token])
 parseC' lhs (TokAnd : tokens) =
   let (rhs, rest) = parseU tokens
-  in (parseC' (And lhs rhs) rest)
+  in (parseC' (lhs :&: rhs) rest)
 parseC' lhs tokens = (lhs, tokens)
 
 -- U -> "True"
@@ -323,21 +323,22 @@ parseU (tok : tokens) =
       in (Compare lhs, rest)
 
 --------------------------------------------------------------------------
--- Conjunctive Normal From
+-- Conjunctive Normal From                                              --
 --------------------------------------------------------------------------
 
 eliminateFollowsAndEquiv :: BoolExpression -> BoolExpression
-eliminateFollowsAndEquiv (Equiv lhs rhs) =
-  let (l,r)=(eliminateFollowsAndEquiv lhs, eliminateFollowsAndEquiv rhs)
-  in And (Implies l r) (Implies r l)
-eliminateFollowsAndEquiv (Follows lhs rhs) = Implies (eliminateFollowsAndEquiv lhs) (eliminateFollowsAndEquiv rhs)
+eliminateFollowsAndEquiv (lhs :==: rhs) =
+  let (l, r) = (eliminateFollowsAndEquiv lhs, eliminateFollowsAndEquiv rhs)
+  in (l :->: r) :&: (r :->: l)
+-- Is this intentional? Maybe rhs -> lhs? check evaluateBoolExpression too
+eliminateFollowsAndEquiv (lhs :<-: rhs) = (eliminateFollowsAndEquiv lhs) :->: (eliminateFollowsAndEquiv rhs)
 eliminateFollowsAndEquiv (Not e) = Not (eliminateFollowsAndEquiv e)
 eliminateFollowsAndEquiv e = e
 
 eliminateImplication :: BoolExpression -> BoolExpression
-eliminateImplication (Implies lhs rhs) =
-  let (l,r)=(eliminateImplication lhs, eliminateImplication rhs)
-  in Or (Not l) r
+eliminateImplication (lhs :->: rhs) =
+  let (l, r) = (eliminateImplication lhs, eliminateImplication rhs)
+  in (Not l) :|: r
 eliminateImplication (Not e) = Not (eliminateImplication e)
 eliminateImplication e = e
 
@@ -347,34 +348,25 @@ pushAndEliminateNot e = pushNot 0 e
     pushNot 1 (BoolConst e)  = BoolConst (not e)
     pushNot 1 (Compare r) = Not (Compare r)
     pushNot 1 (Not e) = pushNot 0 e
-    pushNot 1 (And lhs rhs) = Or (pushNot 1 lhs) (pushNot 1 rhs)
-    pushNot 1 (Or lhs rhs) = And (pushNot 1 lhs) (pushNot 1 rhs)
-    pushNot 0 (Or lhs rhs) = Or (pushNot 0 lhs) (pushNot 0 rhs)
-    pushNot 0 (And lhs rhs) = And (pushNot 0 lhs) (pushNot 0 rhs)
+    pushNot 1 (lhs :&: rhs) = (pushNot 1 lhs) :|: (pushNot 1 rhs)
+    pushNot 1 (lhs :|: rhs) = (pushNot 1 lhs) :&: (pushNot 1 rhs)
+    pushNot 0 (lhs :|: rhs) = (pushNot 0 lhs) :|: (pushNot 0 rhs)
+    pushNot 0 (lhs :&: rhs) = (pushNot 0 lhs) :&: (pushNot 0 rhs)
     pushNot 0 (Not e) = pushNot 1 e
     pushNot 0 e = e
 
-{-
 distributeOrOverAnd :: BoolExpression -> BoolExpression
-distributeOrOverAnd (Or (And l r) rhs) = And (Or l rhs) (Or r rhs)
-distributeOrOverAnd (Or lhs (And l r)) = And (Or lhs l) (Or lhs r)
-distributeOrOverAnd (And lhs rhs) = And (distributeOrOverAnd lhs) (distributeOrOverAnd rhs)
+distributeOrOverAnd ((l :&: r) :|: rhs) = (l :|: rhs) :&: (r :|: rhs)
+distributeOrOverAnd (lhs :|: (l :&: r)) = (lhs :|: l) :&: (lhs :|: r)
+distributeOrOverAnd (lhs :&: rhs) = (distributeOrOverAnd lhs) :&: (distributeOrOverAnd rhs)
 distributeOrOverAnd e = e
--}
-
-distributeOrOverAnd :: BoolExpression -> BoolExpression
-distributeOrOverAnd (Or (And l r) rhs) = And (Or l rhs) (Or r rhs)
-distributeOrOverAnd (Or lhs (And l r)) = And (Or lhs l) (Or lhs r)
-distributeOrOverAnd (And lhs rhs) = And (distributeOrOverAnd lhs) (distributeOrOverAnd rhs)
-distributeOrOverAnd e = e
-
-
 
 cnf :: BoolExpression -> BoolExpression
-cnf  = distributeOrOverAnd.pushAndEliminateNot.eliminateImplication.eliminateFollowsAndEquiv
+cnf = distributeOrOverAnd.pushAndEliminateNot.eliminateImplication.eliminateFollowsAndEquiv
 
 cnfstr :: String -> BoolExpression
 cnfstr s = cnf $ parseBoolExpression s
+
 --------------------------------------------------------------------------
 -- Assignment                                                           --
 --------------------------------------------------------------------------
@@ -414,12 +406,12 @@ parseA (tok : _) = error ("Syntax error: " ++ show tok)
 --------------------------------------------------------------------------
 
 wpArithExp :: Assignment -> ArithExpression -> ArithExpression
-wpArithExp ass (Plus lhs rhs) = Plus (wpArithExp ass lhs) (wpArithExp ass rhs)
-wpArithExp ass (Minus lhs rhs) = Minus (wpArithExp ass lhs) (wpArithExp ass rhs)
-wpArithExp ass (Times lhs rhs) = Times (wpArithExp ass lhs) (wpArithExp ass rhs)
-wpArithExp ass (Div lhs rhs) = Div (wpArithExp ass lhs) (wpArithExp ass rhs)
-wpArithExp ass (Mod lhs rhs) = Mod (wpArithExp ass lhs) (wpArithExp ass rhs)
-wpArithExp ass (Exp lhs rhs) = Exp (wpArithExp ass lhs) (wpArithExp ass rhs)
+wpArithExp ass (lhs :+: rhs) = (wpArithExp ass lhs) :+: (wpArithExp ass rhs)
+wpArithExp ass (lhs :-: rhs) = (wpArithExp ass lhs) :-: (wpArithExp ass rhs)
+wpArithExp ass (lhs :*: rhs) = (wpArithExp ass lhs) :*: (wpArithExp ass rhs)
+wpArithExp ass (lhs :/: rhs) = (wpArithExp ass lhs) :/: (wpArithExp ass rhs)
+wpArithExp ass (lhs :%: rhs) = (wpArithExp ass lhs) :%: (wpArithExp ass rhs)
+wpArithExp ass (lhs :^: rhs) = (wpArithExp ass lhs) :^: (wpArithExp ass rhs)
 wpArithExp ass (UnaryMinus exp) = UnaryMinus (wpArithExp ass exp)
 wpArithExp (Assign var e) (Variable str) =
   if str == var
@@ -436,11 +428,11 @@ wpRel ass (lhs :>: rhs) = (wpArithExp ass lhs) :>: (wpArithExp ass rhs)
 wpRel ass (lhs :<>: rhs) = (wpArithExp ass lhs) :<>: (wpArithExp ass rhs)
 
 wp0 :: Assignment -> BoolExpression -> BoolExpression
-wp0 ass (And lhs rhs) = And (wp0 ass lhs) (wp0 ass rhs)
-wp0 ass (Or lhs rhs) = Or (wp0 ass lhs) (wp0 ass rhs)
-wp0 ass (Implies lhs rhs) = Implies (wp0 ass lhs) (wp0 ass rhs)
-wp0 ass (Follows lhs rhs) = Follows (wp0 ass lhs) (wp0 ass rhs)
-wp0 ass (Equiv lhs rhs) = Equiv (wp0 ass lhs) (wp0 ass rhs)
+wp0 ass (lhs :&: rhs) = (wp0 ass lhs) :&: (wp0 ass rhs)
+wp0 ass (lhs :|: rhs) = (wp0 ass lhs) :|: (wp0 ass rhs)
+wp0 ass (lhs :->: rhs) = (wp0 ass lhs) :->: (wp0 ass rhs)
+wp0 ass (lhs :<-: rhs) = (wp0 ass lhs) :<-: (wp0 ass rhs)
+wp0 ass (lhs :==: rhs) = (wp0 ass lhs) :==: (wp0 ass rhs)
 wp0 ass (Not exp) = Not (wp0 ass exp)
 wp0 ass (Compare rel) = Compare (wpRel ass rel)
 
@@ -455,30 +447,30 @@ wp assStr expStr =
   in wps ass exp
 
 --------------------------------------------------------------------------
--- Simplify                                                             --
+-- Simplification                                                       --
 --------------------------------------------------------------------------
 
 pushMinus :: ArithExpression -> ArithExpression
-pushMinus (Plus lhs rhs) = Plus (pushMinus lhs) (pushMinus rhs)
-pushMinus (Minus lhs rhs) = Plus (pushMinus lhs) (pushMinus rhs)
-pushMinus (Times lhs rhs) = Times (pushMinus lhs) rhs
-pushMinus (Div lhs rhs) = Div (pushMinus lhs) rhs
-pushMinus (Mod lhs rhs) = Mod (pushMinus lhs) rhs
-pushMinus (Exp lhs rhs) = Exp (pushMinus lhs) rhs
+pushMinus (lhs :+: rhs) = (pushMinus lhs) :+: (pushMinus rhs)
+pushMinus (lhs :-: rhs) = (pushMinus lhs) :+: (pushMinus rhs)
+pushMinus (lhs :*: rhs) = (pushMinus lhs) :*: rhs
+pushMinus (lhs :/: rhs) = (pushMinus lhs) :/: rhs
+pushMinus (lhs :%: rhs) = (pushMinus lhs) :%: rhs
+pushMinus (lhs :^: rhs) = (pushMinus lhs) :^: rhs
 pushMinus (UnaryMinus exp) = exp
 pushMinus (IntValue n) = UnaryMinus (IntValue n)
 pushMinus (Variable str) = UnaryMinus (Variable str)
 pushMinus (Constant str) = UnaryMinus (Constant str)
 
 normalize :: ArithExpression -> ArithExpression
-normalize (Minus lhs rhs) =
+normalize (lhs :-: rhs) =
   let (lhs', rhs') = (normalize lhs, pushMinus (normalize rhs))
-  in Plus lhs' rhs'
-normalize (Plus lhs rhs) = Plus (normalize lhs) (normalize rhs)
-normalize (Times lhs rhs) = Times (normalize lhs) (normalize rhs)
-normalize (Div lhs rhs) = Div (normalize lhs) (normalize rhs)
-normalize (Mod lhs rhs) = Mod (normalize lhs) (normalize rhs)
-normalize (Exp lhs rhs) = Exp (normalize lhs) (normalize rhs)
+  in lhs' :+: rhs'
+normalize (lhs :+: rhs) = (normalize lhs) :+: (normalize rhs)
+normalize (lhs :*: rhs) = (normalize lhs) :*: (normalize rhs)
+normalize (lhs :/: rhs) = (normalize lhs) :/: (normalize rhs)
+normalize (lhs :%: rhs) = (normalize lhs) :%: (normalize rhs)
+normalize (lhs :^: rhs) = (normalize lhs) :^: (normalize rhs)
 normalize (UnaryMinus exp) = pushMinus (normalize exp)
 normalize exp = exp
 
@@ -558,12 +550,12 @@ evalArithExp (Constant str) vals =
     Just v -> v
     Nothing -> error ("Undefined constant: " ++ str)
 evalArithExp (UnaryMinus exp) vals = -(evalArithExp exp vals)
-evalArithExp (Plus lhs rhs) vals = (evalArithExp lhs vals) + (evalArithExp rhs vals)
-evalArithExp (Minus lhs rhs) vals = (evalArithExp lhs vals) - (evalArithExp rhs vals)
-evalArithExp (Times lhs rhs) vals = (evalArithExp lhs vals) * (evalArithExp rhs vals)
-evalArithExp (Div lhs rhs) vals = div (evalArithExp lhs vals) (evalArithExp rhs vals)
-evalArithExp (Mod lhs rhs) vals = mod (evalArithExp lhs vals) (evalArithExp rhs vals)
-evalArithExp (Exp lhs rhs) vals = (evalArithExp lhs vals) ^ (evalArithExp rhs vals)
+evalArithExp (lhs :+: rhs) vals = (evalArithExp lhs vals) + (evalArithExp rhs vals)
+evalArithExp (lhs :-: rhs) vals = (evalArithExp lhs vals) - (evalArithExp rhs vals)
+evalArithExp (lhs :*: rhs) vals = (evalArithExp lhs vals) * (evalArithExp rhs vals)
+evalArithExp (lhs :/: rhs) vals = (evalArithExp lhs vals) `div` (evalArithExp rhs vals)
+evalArithExp (lhs :%: rhs) vals = (evalArithExp lhs vals) `mod` (evalArithExp rhs vals)
+evalArithExp (lhs :^: rhs) vals = (evalArithExp lhs vals) ^ (evalArithExp rhs vals)
 
 evalRelation :: Relation -> [Valuation] -> Bool
 evalRelation (lhs :<: rhs) vals = evalArithExp lhs vals < evalArithExp rhs vals
@@ -574,8 +566,11 @@ evalRelation (lhs :>: rhs) vals = evalRelation (rhs :<: lhs) vals
 evalRelation (lhs :<>: rhs) vals = not (evalRelation (rhs :=: lhs) vals)
 
 evalBoolExpression :: BoolExpression -> [Valuation] -> Bool
-evalBoolExpression (And lhs rhs) vals = (evalBoolExpression lhs vals) && (evalBoolExpression rhs vals)
-evalBoolExpression (Or lhs rhs) vals = (evalBoolExpression lhs vals) || (evalBoolExpression rhs vals)
+evalBoolExpression (lhs :&: rhs) vals = (evalBoolExpression lhs vals) && (evalBoolExpression rhs vals)
+evalBoolExpression (lhs :|: rhs) vals = (evalBoolExpression lhs vals) || (evalBoolExpression rhs vals)
+evalBoolExpression (lhs :->: rhs) vals = not (evalBoolExpression lhs vals) || (evalBoolExpression rhs vals)
+evalBoolExpression (lhs :<-: rhs) vals = not (evalBoolExpression rhs vals) || (evalBoolExpression lhs vals)
+evalBoolExpression (lhs :==: rhs) vals = (evalBoolExpression lhs vals) == (evalBoolExpression rhs vals)
 evalBoolExpression (Not exp) vals = not (evalBoolExpression exp vals)
 evalBoolExpression (Compare rel) vals = evalRelation rel vals
 
@@ -608,34 +603,34 @@ listExpIdentifiers :: ArithExpression -> [String]
 listExpIdentifiers exp = nub (listExpIdentifiers' exp [])
 
 listExpIdentifiers' :: ArithExpression -> [String] -> [String]
-listExpIdentifiers' (Plus lhs rhs) ids = (listExpIdentifiers' lhs ids) ++ (listExpIdentifiers' rhs ids)
-listExpIdentifiers' (Minus lhs rhs) ids = (listExpIdentifiers' lhs ids) ++ (listExpIdentifiers' rhs ids)
-listExpIdentifiers' (Times lhs rhs) ids = (listExpIdentifiers' lhs ids) ++ (listExpIdentifiers' rhs ids)
-listExpIdentifiers' (Div lhs rhs) ids = (listExpIdentifiers' lhs ids) ++ (listExpIdentifiers' rhs ids)
-listExpIdentifiers' (Mod lhs rhs) ids = (listExpIdentifiers' lhs ids) ++ (listExpIdentifiers' rhs ids)
-listExpIdentifiers' (Exp lhs rhs) ids = (listExpIdentifiers' lhs ids) ++ (listExpIdentifiers' rhs ids)
+listExpIdentifiers' (lhs :+: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
+listExpIdentifiers' (lhs :-: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
+listExpIdentifiers' (lhs :*: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
+listExpIdentifiers' (lhs :/: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
+listExpIdentifiers' (lhs :%: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
+listExpIdentifiers' (lhs :^: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
 listExpIdentifiers' (UnaryMinus exp) ids = listExpIdentifiers' exp ids
 listExpIdentifiers' (Variable var) ids = (var : ids)
 listExpIdentifiers' (Constant const) ids = (const : ids)
 listExpIdentifiers' _ ids = ids
 
 listRelIdentifiers :: Relation -> [String]
-listRelIdentifiers (lhs :<: rhs) = nub ((listExpIdentifiers lhs) ++ (listExpIdentifiers rhs))
-listRelIdentifiers (lhs :<=: rhs) = nub ((listExpIdentifiers lhs) ++ (listExpIdentifiers rhs))
-listRelIdentifiers (lhs :=: rhs) = nub ((listExpIdentifiers lhs) ++ (listExpIdentifiers rhs))
-listRelIdentifiers (lhs :>=: rhs) = nub ((listExpIdentifiers lhs) ++ (listExpIdentifiers rhs))
-listRelIdentifiers (lhs :>: rhs) = nub ((listExpIdentifiers lhs) ++ (listExpIdentifiers rhs))
-listRelIdentifiers (lhs :<>: rhs) = nub ((listExpIdentifiers lhs) ++ (listExpIdentifiers rhs))
+listRelIdentifiers (lhs :<: rhs) = nub (listExpIdentifiers lhs ++ listExpIdentifiers rhs)
+listRelIdentifiers (lhs :<=: rhs) = nub (listExpIdentifiers lhs ++ listExpIdentifiers rhs)
+listRelIdentifiers (lhs :=: rhs) = nub (listExpIdentifiers lhs ++ listExpIdentifiers rhs)
+listRelIdentifiers (lhs :>=: rhs) = nub (listExpIdentifiers lhs ++ listExpIdentifiers rhs)
+listRelIdentifiers (lhs :>: rhs) = nub (listExpIdentifiers lhs ++ listExpIdentifiers rhs)
+listRelIdentifiers (lhs :<>: rhs) = nub (listExpIdentifiers lhs ++ listExpIdentifiers rhs)
 
 listBoolExpIdentifiers :: BoolExpression -> [String]
-listBoolExpIdentifiers (BoolConst _) = []
-listBoolExpIdentifiers (Compare rel) = listRelIdentifiers rel
+listBoolExpIdentifiers (lhs :&: rhs) = nub (listBoolExpIdentifiers lhs ++ listBoolExpIdentifiers rhs)
+listBoolExpIdentifiers (lhs :|: rhs) = nub (listBoolExpIdentifiers lhs ++ listBoolExpIdentifiers rhs)
+listBoolExpIdentifiers (lhs :->: rhs) = nub (listBoolExpIdentifiers lhs ++ listBoolExpIdentifiers rhs)
+listBoolExpIdentifiers (lhs :<-: rhs) = nub (listBoolExpIdentifiers lhs ++ listBoolExpIdentifiers rhs)
+listBoolExpIdentifiers (lhs :==: rhs) = nub (listBoolExpIdentifiers lhs ++ listBoolExpIdentifiers rhs)
 listBoolExpIdentifiers (Not exp) = listBoolExpIdentifiers exp
-listBoolExpIdentifiers (And lhs rhs) = nub ((listBoolExpIdentifiers lhs) ++ (listBoolExpIdentifiers rhs))
-listBoolExpIdentifiers (Or lhs rhs) = nub ((listBoolExpIdentifiers lhs) ++ (listBoolExpIdentifiers rhs))
-listBoolExpIdentifiers (Implies lhs rhs) = nub ((listBoolExpIdentifiers lhs) ++ (listBoolExpIdentifiers rhs))
-listBoolExpIdentifiers (Follows lhs rhs) = nub ((listBoolExpIdentifiers lhs) ++ (listBoolExpIdentifiers rhs))
-listBoolExpIdentifiers (Equiv lhs rhs) = nub ((listBoolExpIdentifiers lhs) ++ (listBoolExpIdentifiers rhs))
+listBoolExpIdentifiers (Compare rel) = listRelIdentifiers rel
+listBoolExpIdentifiers _ = []
 
 randomValuations :: [String] -> Int -> Integer -> Integer -> [[Valuation]]
 randomValuations ids len lwb upb = randomValuations' (replicate len ids) (randomSets len (length ids) lwb upb)
