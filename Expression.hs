@@ -470,6 +470,58 @@ pushMinus (IntValue n) = UnaryMinus (IntValue n)
 pushMinus (Variable str) = UnaryMinus (Variable str)
 pushMinus (Constant str) = UnaryMinus (Constant str)
 
+normalize :: ArithExpression -> ArithExpression
+normalize (Minus lhs rhs) =
+  let (lhs', rhs') = (normalize lhs, pushMinus (normalize rhs))
+  in Plus lhs' rhs'
+normalize (Plus lhs rhs) = Plus (normalize lhs) (normalize rhs)
+normalize (Times lhs rhs) = Times (normalize lhs) (normalize rhs)
+normalize (Div lhs rhs) = Div (normalize lhs) (normalize rhs)
+normalize (Mod lhs rhs) = Mod (normalize lhs) (normalize rhs)
+normalize (Exp lhs rhs) = Exp (normalize lhs) (normalize rhs)
+normalize (UnaryMinus exp) = pushMinus (normalize exp)
+normalize exp = exp
+
+--instance Eq Expression where
+--  _ = True
+
+-- instance Eq ArithExpression where
+--   (Binary op1 lhs1 rhs1) == (Binary op2 lhs2 rhs2) =
+--     op1 == op2 && lhs1 == lhs2 && rhs1 == rhs2
+--   (Unary op1 exp1) == (Unary op2 exp2) = op1 == op2 && exp1 == exp2
+--   (IntValue a) == (IntValue b) = a == b
+--   (Variable a) == (Variable b) = a == b
+--   (Constant a) == (Constant b) = a == b
+--   _ == _ = False
+--
+-- -- Int -> Unary -> Var -> Const -> Binary
+-- instance Ord ArithExpression where
+--   (Binary op lhs rhs) > _ = True
+--   _ > (Binary op lhs rhs) = False
+--
+--   (Unary Minus a) > (Unary Minus b) = a > b
+--   (Unary Minus a) > b = a > b
+--   a > (Unary Minus b) = a > b
+--
+--   (IntValue a) > (IntValue b) = a > b
+--   (IntValue a) > _ = False
+--   _ > (IntValue n) = True
+--
+--   (Variable a) > (Variable b) = a > b
+--   (Variable a) > _ = False
+--   _ > (Variable b) = True
+--
+--   (Constant a) > (Constant b) = a > b
+--
+--   a >= b = a > b || a == b
+--   a <= b = not (a > b)
+--   a < b = not (a == b) && a <= b
+
+
+--------------------------------------------------------------------------
+-- Evaluation                                                           --
+--------------------------------------------------------------------------
+
 type Valuation = (String, Integer)
 
 getValue :: String -> [Valuation] -> Maybe Integer
@@ -495,38 +547,28 @@ sumValuations' (str,n) ((s,o):vals) =
     then ((s, n+o):vals)
     else sumValuations' (str,n) vals
 
-evalAExpression :: ArithExpression -> [Valuation] -> Integer
-evalAExpression (IntValue n) _ = n
-evalAExpression (Variable str) vals =
+evalArithExp :: ArithExpression -> [Valuation] -> Integer
+evalArithExp (IntValue n) _ = n
+evalArithExp (Variable str) vals =
   case getValue str vals of
     Just v -> v
     Nothing -> error ("Undefined variable: " ++ str)
-evalAExpression (Constant str) vals =
+evalArithExp (Constant str) vals =
   case getValue str vals of
     Just v -> v
     Nothing -> error ("Undefined constant: " ++ str)
-evalAExpression (UnaryMinus exp) vals = -(evalAExpression exp vals)
-evalAExpression (Plus lhs rhs) vals = (evalAExpression lhs vals) + (evalAExpression rhs vals)
-evalAExpression (Minus lhs rhs) vals = (evalAExpression lhs vals) - (evalAExpression rhs vals)
-evalAExpression (Times lhs rhs) vals = (evalAExpression lhs vals) * (evalAExpression rhs vals)
-evalAExpression (Div lhs rhs) vals = div (evalAExpression lhs vals) (evalAExpression rhs vals)
-evalAExpression (Mod lhs rhs) vals = mod (evalAExpression lhs vals) (evalAExpression rhs vals)
-evalAExpression (Exp lhs rhs) vals = (evalAExpression lhs vals) ^ (evalAExpression rhs vals)
-
-simulateStep :: Assignment -> [Valuation] -> [Valuation]
-simulateStep (Assign var exp) vals = setValue var (evalAExpression exp vals) vals
-
-simulate :: [Assignment] -> [Valuation] -> [Valuation]
-simulate [] vals = vals
-simulate (a:as) vals = simulate as (simulateStep a vals)
-
-runSimulation :: String -> [Valuation] -> [Valuation]
-runSimulation s vals = simulate (parseAssignments s) vals
+evalArithExp (UnaryMinus exp) vals = -(evalArithExp exp vals)
+evalArithExp (Plus lhs rhs) vals = (evalArithExp lhs vals) + (evalArithExp rhs vals)
+evalArithExp (Minus lhs rhs) vals = (evalArithExp lhs vals) - (evalArithExp rhs vals)
+evalArithExp (Times lhs rhs) vals = (evalArithExp lhs vals) * (evalArithExp rhs vals)
+evalArithExp (Div lhs rhs) vals = div (evalArithExp lhs vals) (evalArithExp rhs vals)
+evalArithExp (Mod lhs rhs) vals = mod (evalArithExp lhs vals) (evalArithExp rhs vals)
+evalArithExp (Exp lhs rhs) vals = (evalArithExp lhs vals) ^ (evalArithExp rhs vals)
 
 evalRelation :: Relation -> [Valuation] -> Bool
-evalRelation (lhs :<: rhs) vals = evalAExpression lhs vals < evalAExpression rhs vals
-evalRelation (lhs :=: rhs) vals = evalAExpression lhs vals == evalAExpression rhs vals
-evalRelation (lhs :<=: rhs) vals = evalAExpression lhs vals <= evalAExpression rhs vals
+evalRelation (lhs :<: rhs) vals = evalArithExp lhs vals < evalArithExp rhs vals
+evalRelation (lhs :=: rhs) vals = evalArithExp lhs vals == evalArithExp rhs vals
+evalRelation (lhs :<=: rhs) vals = evalArithExp lhs vals <= evalArithExp rhs vals
 evalRelation (lhs :>=: rhs) vals = evalRelation (rhs :<=: lhs) vals
 evalRelation (lhs :>: rhs) vals = evalRelation (rhs :<: lhs) vals
 evalRelation (lhs :<>: rhs) vals = not (evalRelation (rhs :=: lhs) vals)
@@ -537,66 +579,19 @@ evalBoolExpression (Or lhs rhs) vals = (evalBoolExpression lhs vals) || (evalBoo
 evalBoolExpression (Not exp) vals = not (evalBoolExpression exp vals)
 evalBoolExpression (Compare rel) vals = evalRelation rel vals
 
-testHoareTriple :: [Valuation] -> String -> String -> Bool
-testHoareTriple vals assStr expStr =
-  evalBoolExpression (parseBoolExpression expStr) (runSimulation assStr vals)
-
--- SIMPLIFICATION
-
---instance Eq Expression where
---  _ = True
-
--- instance Eq ArithExpression where
---   (Binary op1 lhs1 rhs1) == (Binary op2 lhs2 rhs2) =
---     op1 == op2 && lhs1 == lhs2 && rhs1 == rhs2
---   (Unary op1 exp1) == (Unary op2 exp2) = op1 == op2 && exp1 == exp2
---   (IntValue a) == (IntValue b) = a == b
---   (Variable a) == (Variable b) = a == b
---   (Constant a) == (Constant b) = a == b
---   _ == _ = False
--- 
--- -- Int -> Unary -> Var -> Const -> Binary
--- instance Ord ArithExpression where
---   (Binary op lhs rhs) > _ = True
---   _ > (Binary op lhs rhs) = False
--- 
---   (Unary Minus a) > (Unary Minus b) = a > b
---   (Unary Minus a) > b = a > b
---   a > (Unary Minus b) = a > b
--- 
---   (IntValue a) > (IntValue b) = a > b
---   (IntValue a) > _ = False
---   _ > (IntValue n) = True
--- 
---   (Variable a) > (Variable b) = a > b
---   (Variable a) > _ = False
---   _ > (Variable b) = True
--- 
---   (Constant a) > (Constant b) = a > b
--- 
---   a >= b = a > b || a == b
---   a <= b = not (a > b)
---   a < b = not (a == b) && a <= b
-
-normalize :: ArithExpression -> ArithExpression
-normalize (Minus lhs rhs) =
-  let (lhs', rhs') = (normalize lhs, pushMinus (normalize rhs))
-  in Plus lhs' rhs'
-normalize (Plus lhs rhs) = Plus (normalize lhs) (normalize rhs)
-normalize (Times lhs rhs) = Times (normalize lhs) (normalize rhs)
-normalize (Div lhs rhs) = Div (normalize lhs) (normalize rhs)
-normalize (Mod lhs rhs) = Mod (normalize lhs) (normalize rhs)
-normalize (Exp lhs rhs) = Exp (normalize lhs) (normalize rhs)
-normalize (UnaryMinus exp) = pushMinus (normalize exp)
-normalize exp = exp
-
 --------------------------------------------------------------------------
 -- Testing                                                              --
 --------------------------------------------------------------------------
 
---testHoareTriple :: [Valuation] -> String -> String -> Bool
---testHoareTriple vals assStr expStr =
---  evalBoolExpression (parseBoolExpression expStr) (runSimulation assStr vals)
+simulateStep :: Assignment -> [Valuation] -> [Valuation]
+simulateStep (Assign var exp) vals = setValue var (evalArithExp exp vals) vals
+
+simulate :: [Assignment] -> [Valuation] -> [Valuation]
+simulate [] vals = vals
+simulate (a:as) vals = simulate as (simulateStep a vals)
+
+runSimulation :: [Assignment] -> [Valuation] -> [Valuation]
+runSimulation assignments vals = simulate assignments vals
 
 randomList :: Integer -> Integer -> [Integer]
 randomList lwb upb = map (\x -> x `mod` (upb+1-lwb) + lwb) rl
@@ -610,7 +605,7 @@ randomSets :: Int -> Int -> Integer -> Integer -> [[Integer]]
 randomSets n len lwb upb = take n (splitInfiniteList len (randomList lwb upb))
 
 listExpIdentifiers :: ArithExpression -> [String]
-listExpIdentifiers exp = nub (sort (listExpIdentifiers' exp []))
+listExpIdentifiers exp = nub (listExpIdentifiers' exp [])
 
 listExpIdentifiers' :: ArithExpression -> [String] -> [String]
 listExpIdentifiers' (Plus lhs rhs) ids = (listExpIdentifiers' lhs ids) ++ (listExpIdentifiers' rhs ids)
@@ -624,13 +619,46 @@ listExpIdentifiers' (Variable var) ids = (var : ids)
 listExpIdentifiers' (Constant const) ids = (const : ids)
 listExpIdentifiers' _ ids = ids
 
-randomValuations :: ArithExpression -> Int -> Integer -> Integer -> [[Valuation]]
-randomValuations exp len lwb upb =
-  let ids = listExpIdentifiers exp
-      values = randomSets len (length ids) lwb upb
-  in randomValuations' (replicate len ids) values
+listRelIdentifiers :: Relation -> [String]
+listRelIdentifiers (lhs :<: rhs) = nub ((listExpIdentifiers lhs) ++ (listExpIdentifiers rhs))
+listRelIdentifiers (lhs :<=: rhs) = nub ((listExpIdentifiers lhs) ++ (listExpIdentifiers rhs))
+listRelIdentifiers (lhs :=: rhs) = nub ((listExpIdentifiers lhs) ++ (listExpIdentifiers rhs))
+listRelIdentifiers (lhs :>=: rhs) = nub ((listExpIdentifiers lhs) ++ (listExpIdentifiers rhs))
+listRelIdentifiers (lhs :>: rhs) = nub ((listExpIdentifiers lhs) ++ (listExpIdentifiers rhs))
+listRelIdentifiers (lhs :<>: rhs) = nub ((listExpIdentifiers lhs) ++ (listExpIdentifiers rhs))
+
+listBoolExpIdentifiers :: BoolExpression -> [String]
+listBoolExpIdentifiers (BoolConst _) = []
+listBoolExpIdentifiers (Compare rel) = listRelIdentifiers rel
+listBoolExpIdentifiers (Not exp) = listBoolExpIdentifiers exp
+listBoolExpIdentifiers (And lhs rhs) = nub ((listBoolExpIdentifiers lhs) ++ (listBoolExpIdentifiers rhs))
+listBoolExpIdentifiers (Or lhs rhs) = nub ((listBoolExpIdentifiers lhs) ++ (listBoolExpIdentifiers rhs))
+listBoolExpIdentifiers (Implies lhs rhs) = nub ((listBoolExpIdentifiers lhs) ++ (listBoolExpIdentifiers rhs))
+listBoolExpIdentifiers (Follows lhs rhs) = nub ((listBoolExpIdentifiers lhs) ++ (listBoolExpIdentifiers rhs))
+listBoolExpIdentifiers (Equiv lhs rhs) = nub ((listBoolExpIdentifiers lhs) ++ (listBoolExpIdentifiers rhs))
+
+randomValuations :: [String] -> Int -> Integer -> Integer -> [[Valuation]]
+randomValuations ids len lwb upb = randomValuations' (replicate len ids) (randomSets len (length ids) lwb upb)
 
 randomValuations' :: [[String]] -> [[Integer]] -> [[Valuation]]
-randomValuations' (ids : []) (values : []) = [zip ids values]
-randomValuations' (ids : idsList) (values : valuesList) = [zip ids values] ++ (randomValuations' idsList valuesList)
-randomValuations' _ _ = error "identifier and value lists must be same length"
+randomValuations' [] [] = []
+randomValuations' (ids:idsList) (values:valuesList) = [zip ids values] ++ (randomValuations' idsList valuesList)
+randomValuations' _ _ = error "Identifier and value lists must be same length"
+
+findCounterExample :: String -> String -> String -> Int -> Integer -> Integer -> Maybe [Valuation]
+findCounterExample preStr assStr postStr len lwb upb =
+  let pre = parseBoolExpression preStr
+      assignments = parseAssignments assStr
+      post = parseBoolExpression postStr
+      ids = nub (listBoolExpIdentifiers pre ++ listBoolExpIdentifiers post)
+      values = randomValuations ids len lwb upb
+  in findCounterExample' pre assignments post values
+
+findCounterExample' :: BoolExpression -> [Assignment] -> BoolExpression -> [[Valuation]] -> Maybe [Valuation]
+findCounterExample' pre ass post [] = Nothing
+findCounterExample' pre ass post (val:vals) =
+  if evalBoolExpression pre val
+    then if not (evalBoolExpression post (runSimulation ass val))
+      then Just val
+      else findCounterExample' pre ass post vals
+    else findCounterExample' pre ass post vals
