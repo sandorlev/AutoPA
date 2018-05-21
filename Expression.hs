@@ -29,7 +29,7 @@ matchHead (x:xs) (y:ys)
 lexer :: String -> [Token]
 lexer [] = [TokEnd]
 lexer (c : cs)
-  -- Note that the order of the following lines is impoertant!
+  -- Note that the order of the following lines is important!
   | isSpace c = lexer (dropWhile isSpace cs)
   | matchHead ":=" (c:cs) = TokAssign : lexer (drop 1 cs)
   | c == '(' = TokLpar:lexer cs
@@ -52,9 +52,9 @@ lexer (c : cs)
   | c == '%' = TokMod:lexer cs
   | c == '^' = TokExp:lexer cs
   -- literals
-  | isLower c = (TokVariable (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
-  | isUpper c = (TokConstant (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
-  | isDigit c = (TokIntValue (read (c : takeWhile isDigit cs))) : lexer (dropWhile isDigit cs)
+  | isLower c = TokVariable (c : takeWhile isAlpha cs) : lexer (dropWhile isAlpha cs)
+  | isUpper c = TokConstant (c : takeWhile isAlpha cs) : lexer (dropWhile isAlpha cs)
+  | isDigit c = TokIntValue (read (c : takeWhile isDigit cs)) : lexer (dropWhile isDigit cs)
   -- compare operators
   | matchHead "<=" (c:cs) = TokLEQ : lexer (drop 1 cs)
   | matchHead ">=" (c:cs) = TokGEQ : lexer (drop 1 cs)
@@ -127,7 +127,7 @@ parseT tokens =
   let (lhs, rest) = parseF tokens
   in parseT' lhs rest
 
--- T' -> ("*" | "/" | "%") F
+-- T' -> ("*" | "/" | "%") F {T'}
 -- T' -> epsilon
 parseT' :: ArithExpression -> [Token] -> (ArithExpression, [Token])
 parseT' lhs (tok : tokens) =
@@ -152,7 +152,7 @@ parseF' lhs (tok : tokens) =
   case tok of
     TokExp ->
       let (rhs, rest) = parseF tokens
-      in ((lhs :^: rhs), rest)
+      in (lhs :^: rhs, rest)
     _ -> (lhs, (tok : tokens))
 
 -- P -> <Var>
@@ -164,9 +164,9 @@ parseP :: [Token] -> (ArithExpression, [Token])
 parseP [] = error "Token expected"
 parseP (tok : tokens) =
   case tok of
-    (TokVariable str) -> ((Variable str), tokens)
-    (TokConstant str) -> ((Constant str), tokens)
-    (TokIntValue n) -> ((IntValue n), tokens)
+    TokVariable str -> (Variable str, tokens)
+    TokConstant str -> (Constant str, tokens)
+    TokIntValue n -> (IntValue n, tokens)
     TokLpar ->
       let (exp, (next : rest)) = parseE tokens
       in
@@ -175,7 +175,138 @@ parseP (tok : tokens) =
           else (exp, rest)
     TokMinus ->
       let (exp, rest) = parseT tokens
-      in ((UnaryMinus exp), rest)
+      in (UnaryMinus exp, rest)
+    _ -> error ("Syntax Error: " ++ show tok)
+
+--------------------------------------------------------------------------
+-- ArithExprList                                                        --
+--------------------------------------------------------------------------
+
+data ArithExprList = Add [ArithExprList]
+                   | Mul [ArithExprList]
+                   | Div [ArithExprList]
+                   | Mod [ArithExprList]
+                   | Exp [ArithExprList]
+                   | Min ArithExprList
+                   | Val Integer
+                   | Var String
+                   | Const String
+
+ps :: ArithExprList -> String
+ps (Val n) = show n
+ps (Var v) = v
+ps (Const c) = c
+ps exp = "(" ++ show exp ++ ")"
+
+instance Show ArithExprList where
+  show (Add (e:[])) = ps e
+  show (Add (e:es)) = ps e ++ "+" ++ show (Add es)
+  show (Mul (e:[])) = ps e
+  show (Mul (e:es)) = ps e ++ "*" ++ show (Mul es)
+  show (Div (e:[])) = ps e
+  show (Div (e:es)) = ps e ++ "/" ++ show (Div es)
+  show (Mod (e:[])) = ps e
+  show (Mod (e:es)) = ps e ++ "%" ++ show (Mod es)
+  show (Exp (e:[])) = ps e
+  show (Exp (e:es)) = ps e ++ "^" ++ show (Exp es)
+  show (Min e) = "-" ++ ps e
+  show e = ps e
+
+parseArithExprList :: String -> ArithExprList
+parseArithExprList str = parseArithExprList' (show (eliminateMinus (parseArithExpression str)))
+
+parseArithExprList' :: String -> ArithExprList
+parseArithExprList' str =
+  let (exp, (tok : tokens)) = parseE2 (lexer str)
+  in
+    case tok of
+      TokEnd -> exp
+      _ -> error ("Unused tokens: " ++ show (tok : tokens))
+
+-- E2 -> T2 {E2'}
+parseE2 :: [Token] -> (ArithExprList, [Token])
+parseE2 tokens =
+  let (lhs, rest) = parseT2 tokens
+  in parseE2' lhs rest
+
+-- E2' -> "+" T2 {E2'}
+-- E2' -> epsilon
+parseE2' :: ArithExprList -> [Token] -> (ArithExprList, [Token])
+parseE2' lhs (TokPlus : tokens) =
+  let (rhs, rest) = parseT2 tokens
+  in
+    case lhs of
+      Add es -> parseE2' (Add (es ++ [rhs])) rest
+      _ -> parseE2' (Add [lhs, rhs]) rest
+parseE2' lhs tokens = (lhs, tokens)
+
+-- T2 -> F2 {T2'}
+parseT2 :: [Token] -> (ArithExprList, [Token])
+parseT2 tokens =
+  let (lhs, rest) = parseF2 tokens
+  in parseT2' lhs rest
+
+-- T2' -> ("*" | "/" | "%") F2 {T2'}
+-- T2' -> epsilon
+parseT2' :: ArithExprList -> [Token] -> (ArithExprList, [Token])
+parseT2' lhs (TokTimes : tokens) =
+  let (rhs, rest) = parseF2 tokens
+  in
+    case lhs of
+      Mul es -> parseT2' (Mul (es ++ [rhs])) rest
+      _ -> parseT2' (Mul [lhs, rhs]) rest
+parseT2' lhs (TokDiv : tokens) =
+  let (rhs, rest) = parseF2 tokens
+  in
+    case lhs of
+      Div es -> parseT2' (Div (es ++ [rhs])) rest
+      _ -> parseT2' (Div [lhs, rhs]) rest
+parseT2' lhs (TokMod : tokens) =
+  let (rhs, rest) = parseF2 tokens
+  in
+    case lhs of
+      Mod es -> parseT2' (Mod (es ++ [rhs])) rest
+      _ -> parseT2' (Mod [lhs, rhs]) rest
+parseT2' lhs tokens = (lhs, tokens)
+
+-- F2 -> P2 {F2'}
+parseF2 :: [Token] -> (ArithExprList, [Token])
+parseF2 tokens =
+  let (lhs, rest) = parseP2 tokens
+  in parseF2' lhs rest
+
+-- F2' -> "^" F2
+-- F2' -> epsilon
+parseF2' :: ArithExprList -> [Token] -> (ArithExprList, [Token])
+parseF2' lhs (TokExp : tokens) =
+  let (rhs, rest) = parseF2 tokens
+  in
+    case lhs of
+      Exp es -> (Exp (es ++ [rhs]), rest)
+      _ -> (Exp [lhs, rhs], rest)
+parseF2' lhs tokens = (lhs, tokens)
+
+-- P2 -> <Var>
+-- P2 -> <Const>
+-- P2 -> <Val>
+-- P2 -> "(" E2 ")"
+-- P2 -> "-" T2
+parseP2 :: [Token] -> (ArithExprList, [Token])
+parseP2 [] = error "Token expected"
+parseP2 (tok : tokens) =
+  case tok of
+    TokVariable str -> (Var str, tokens)
+    TokConstant str -> (Const str, tokens)
+    TokIntValue n -> (Val n, tokens)
+    TokLpar ->
+      let (exp, (next : rest)) = parseE2 tokens
+      in
+        if next /= TokRpar
+          then error "Missing right parenthesis"
+          else (exp, rest)
+    TokMinus ->
+      let (exp, rest) = parseT2 tokens
+      in (Min exp, rest)
     _ -> error ("Syntax Error: " ++ show tok)
 
 --------------------------------------------------------------------------
@@ -211,12 +342,12 @@ parseR tokens =
       (rhs, rest) = parseE toks
   in
     case tok of
-      TokLT -> ((lhs :<: rhs), rest)
-      TokLEQ -> ((lhs :<=: rhs), rest)
-      TokEQ -> ((lhs :=: rhs), rest)
-      TokGEQ -> ((lhs :>=: rhs), rest)
-      TokGT -> ((lhs :>: rhs), rest)
-      TokNEQ -> ((lhs :<>: rhs), rest)
+      TokLT -> (lhs :<: rhs, rest)
+      TokLEQ -> (lhs :<=: rhs, rest)
+      TokEQ -> (lhs :=: rhs, rest)
+      TokGEQ -> (lhs :>=: rhs, rest)
+      TokGT -> (lhs :>: rhs, rest)
+      TokNEQ -> (lhs :<>: rhs, rest)
       _ -> error ("Syntax error: " ++ show tok)
 
 --------------------------------------------------------------------------
@@ -296,7 +427,7 @@ parseC tokens =
 parseC' :: BoolExpression -> [Token] -> (BoolExpression, [Token])
 parseC' lhs (TokAnd : tokens) =
   let (rhs, rest) = parseU tokens
-  in (parseC' (lhs :&: rhs) rest)
+  in parseC' (lhs :&: rhs) rest
 parseC' lhs tokens = (lhs, tokens)
 
 -- U -> "True"
@@ -348,17 +479,17 @@ pushAndEliminateNot e = pushNot 0 e
     pushNot 1 (BoolConst e)  = BoolConst (not e)
     pushNot 1 (Compare r) = Not (Compare r)
     pushNot 1 (Not e) = pushNot 0 e
-    pushNot 1 (lhs :&: rhs) = (pushNot 1 lhs) :|: (pushNot 1 rhs)
-    pushNot 1 (lhs :|: rhs) = (pushNot 1 lhs) :&: (pushNot 1 rhs)
-    pushNot 0 (lhs :|: rhs) = (pushNot 0 lhs) :|: (pushNot 0 rhs)
-    pushNot 0 (lhs :&: rhs) = (pushNot 0 lhs) :&: (pushNot 0 rhs)
+    pushNot 1 (lhs :&: rhs) = pushNot 1 lhs :|: pushNot 1 rhs
+    pushNot 1 (lhs :|: rhs) = pushNot 1 lhs :&: pushNot 1 rhs
+    pushNot 0 (lhs :|: rhs) = pushNot 0 lhs :|: pushNot 0 rhs
+    pushNot 0 (lhs :&: rhs) = pushNot 0 lhs :&: pushNot 0 rhs
     pushNot 0 (Not e) = pushNot 1 e
     pushNot 0 e = e
 
 distributeOrOverAnd :: BoolExpression -> BoolExpression
 distributeOrOverAnd ((l :&: r) :|: rhs) = (l :|: rhs) :&: (r :|: rhs)
 distributeOrOverAnd (lhs :|: (l :&: r)) = (lhs :|: l) :&: (lhs :|: r)
-distributeOrOverAnd (lhs :&: rhs) = (distributeOrOverAnd lhs) :&: (distributeOrOverAnd rhs)
+distributeOrOverAnd (lhs :&: rhs) = distributeOrOverAnd lhs :&: distributeOrOverAnd rhs
 distributeOrOverAnd e = e
 
 cnf :: BoolExpression -> BoolExpression
@@ -378,14 +509,14 @@ instance Show Assignment where
 
 acceptSemicolon :: [Token] -> [Token]
 acceptSemicolon (TokSemiColon:xs) = xs
-acceptSemicolon (TokEnd:xs) = (TokEnd:xs)
+acceptSemicolon (TokEnd:xs) = TokEnd:xs
 acceptSemicolon _ = error "Error: expected semicolon"
 
 parseAssignments :: String -> [Assignment]
 parseAssignments str = parseAs (lexer str)
   where parseAs [TokEnd] = []
         parseAs tokens = ass:parseAs (acceptSemicolon toks)
-          where   (ass, toks) = parseA tokens
+          where (ass, toks) = parseA tokens
 
 parseAssignment :: String -> Assignment
 parseAssignment str =
@@ -398,7 +529,7 @@ parseAssignment str =
 parseA :: [Token] -> (Assignment, [Token])
 parseA (TokVariable var : TokAssign : tokens) =
   let (exp, rest) = parseE tokens
-  in ((Assign var exp), rest)
+  in (Assign var exp, rest)
 parseA (tok : _) = error ("Syntax error: " ++ show tok)
 
 --------------------------------------------------------------------------
@@ -406,33 +537,33 @@ parseA (tok : _) = error ("Syntax error: " ++ show tok)
 --------------------------------------------------------------------------
 
 wpArithExp :: Assignment -> ArithExpression -> ArithExpression
-wpArithExp ass (lhs :+: rhs) = (wpArithExp ass lhs) :+: (wpArithExp ass rhs)
-wpArithExp ass (lhs :-: rhs) = (wpArithExp ass lhs) :-: (wpArithExp ass rhs)
-wpArithExp ass (lhs :*: rhs) = (wpArithExp ass lhs) :*: (wpArithExp ass rhs)
-wpArithExp ass (lhs :/: rhs) = (wpArithExp ass lhs) :/: (wpArithExp ass rhs)
-wpArithExp ass (lhs :%: rhs) = (wpArithExp ass lhs) :%: (wpArithExp ass rhs)
-wpArithExp ass (lhs :^: rhs) = (wpArithExp ass lhs) :^: (wpArithExp ass rhs)
+wpArithExp ass (lhs :+: rhs) = wpArithExp ass lhs :+: wpArithExp ass rhs
+wpArithExp ass (lhs :-: rhs) = wpArithExp ass lhs :-: wpArithExp ass rhs
+wpArithExp ass (lhs :*: rhs) = wpArithExp ass lhs :*: wpArithExp ass rhs
+wpArithExp ass (lhs :/: rhs) = wpArithExp ass lhs :/: wpArithExp ass rhs
+wpArithExp ass (lhs :%: rhs) = wpArithExp ass lhs :%: wpArithExp ass rhs
+wpArithExp ass (lhs :^: rhs) = wpArithExp ass lhs :^: wpArithExp ass rhs
 wpArithExp ass (UnaryMinus exp) = UnaryMinus (wpArithExp ass exp)
 wpArithExp (Assign var e) (Variable str) =
   if str == var
   then e
-  else (Variable str)
+  else Variable str
 wpArithExp ass exp = exp
 
 wpRel :: Assignment -> Relation -> Relation
-wpRel ass (lhs :<: rhs) = (wpArithExp ass lhs) :<: (wpArithExp ass rhs)
-wpRel ass (lhs :<=: rhs) = (wpArithExp ass lhs) :<=: (wpArithExp ass rhs)
-wpRel ass (lhs :=: rhs) = (wpArithExp ass lhs) :=: (wpArithExp ass rhs)
-wpRel ass (lhs :>=: rhs) = (wpArithExp ass lhs) :>=: (wpArithExp ass rhs)
-wpRel ass (lhs :>: rhs) = (wpArithExp ass lhs) :>: (wpArithExp ass rhs)
-wpRel ass (lhs :<>: rhs) = (wpArithExp ass lhs) :<>: (wpArithExp ass rhs)
+wpRel ass (lhs :<: rhs) = wpArithExp ass lhs :<: wpArithExp ass rhs
+wpRel ass (lhs :<=: rhs) = wpArithExp ass lhs :<=: wpArithExp ass rhs
+wpRel ass (lhs :=: rhs) = wpArithExp ass lhs :=: wpArithExp ass rhs
+wpRel ass (lhs :>=: rhs) = wpArithExp ass lhs :>=: wpArithExp ass rhs
+wpRel ass (lhs :>: rhs) = wpArithExp ass lhs :>: wpArithExp ass rhs
+wpRel ass (lhs :<>: rhs) = wpArithExp ass lhs :<>: wpArithExp ass rhs
 
 wp0 :: Assignment -> BoolExpression -> BoolExpression
-wp0 ass (lhs :&: rhs) = (wp0 ass lhs) :&: (wp0 ass rhs)
-wp0 ass (lhs :|: rhs) = (wp0 ass lhs) :|: (wp0 ass rhs)
-wp0 ass (lhs :->: rhs) = (wp0 ass lhs) :->: (wp0 ass rhs)
-wp0 ass (lhs :<-: rhs) = (wp0 ass lhs) :<-: (wp0 ass rhs)
-wp0 ass (lhs :==: rhs) = (wp0 ass lhs) :==: (wp0 ass rhs)
+wp0 ass (lhs :&: rhs) = wp0 ass lhs :&: wp0 ass rhs
+wp0 ass (lhs :|: rhs) = wp0 ass lhs :|: wp0 ass rhs
+wp0 ass (lhs :->: rhs) = wp0 ass lhs :->: wp0 ass rhs
+wp0 ass (lhs :<-: rhs) = wp0 ass lhs :<-: wp0 ass rhs
+wp0 ass (lhs :==: rhs) = wp0 ass lhs :==: wp0 ass rhs
 wp0 ass (Not exp) = Not (wp0 ass exp)
 wp0 ass (Compare rel) = Compare (wpRel ass rel)
 
@@ -451,64 +582,28 @@ wp assStr expStr =
 --------------------------------------------------------------------------
 
 pushMinus :: ArithExpression -> ArithExpression
-pushMinus (lhs :+: rhs) = (pushMinus lhs) :+: (pushMinus rhs)
-pushMinus (lhs :-: rhs) = (pushMinus lhs) :+: (pushMinus rhs)
-pushMinus (lhs :*: rhs) = (pushMinus lhs) :*: rhs
-pushMinus (lhs :/: rhs) = (pushMinus lhs) :/: rhs
-pushMinus (lhs :%: rhs) = (pushMinus lhs) :%: rhs
-pushMinus (lhs :^: rhs) = (pushMinus lhs) :^: rhs
+pushMinus (lhs :+: rhs) = pushMinus lhs :+: pushMinus rhs
+pushMinus (lhs :-: rhs) = pushMinus lhs :+: pushMinus rhs
+pushMinus (lhs :*: rhs) = pushMinus lhs :*: rhs
+pushMinus (lhs :/: rhs) = pushMinus lhs :/: rhs
+pushMinus (lhs :%: rhs) = pushMinus lhs :%: rhs
+pushMinus (lhs :^: rhs) = pushMinus lhs :^: rhs
 pushMinus (UnaryMinus exp) = exp
 pushMinus (IntValue n) = UnaryMinus (IntValue n)
 pushMinus (Variable str) = UnaryMinus (Variable str)
 pushMinus (Constant str) = UnaryMinus (Constant str)
 
-normalize :: ArithExpression -> ArithExpression
-normalize (lhs :-: rhs) =
-  let (lhs', rhs') = (normalize lhs, pushMinus (normalize rhs))
+eliminateMinus :: ArithExpression -> ArithExpression
+eliminateMinus (lhs :-: rhs) =
+  let (lhs', rhs') = (eliminateMinus lhs, pushMinus (eliminateMinus rhs))
   in lhs' :+: rhs'
-normalize (lhs :+: rhs) = (normalize lhs) :+: (normalize rhs)
-normalize (lhs :*: rhs) = (normalize lhs) :*: (normalize rhs)
-normalize (lhs :/: rhs) = (normalize lhs) :/: (normalize rhs)
-normalize (lhs :%: rhs) = (normalize lhs) :%: (normalize rhs)
-normalize (lhs :^: rhs) = (normalize lhs) :^: (normalize rhs)
-normalize (UnaryMinus exp) = pushMinus (normalize exp)
-normalize exp = exp
-
---instance Eq Expression where
---  _ = True
-
--- instance Eq ArithExpression where
---   (Binary op1 lhs1 rhs1) == (Binary op2 lhs2 rhs2) =
---     op1 == op2 && lhs1 == lhs2 && rhs1 == rhs2
---   (Unary op1 exp1) == (Unary op2 exp2) = op1 == op2 && exp1 == exp2
---   (IntValue a) == (IntValue b) = a == b
---   (Variable a) == (Variable b) = a == b
---   (Constant a) == (Constant b) = a == b
---   _ == _ = False
---
--- -- Int -> Unary -> Var -> Const -> Binary
--- instance Ord ArithExpression where
---   (Binary op lhs rhs) > _ = True
---   _ > (Binary op lhs rhs) = False
---
---   (Unary Minus a) > (Unary Minus b) = a > b
---   (Unary Minus a) > b = a > b
---   a > (Unary Minus b) = a > b
---
---   (IntValue a) > (IntValue b) = a > b
---   (IntValue a) > _ = False
---   _ > (IntValue n) = True
---
---   (Variable a) > (Variable b) = a > b
---   (Variable a) > _ = False
---   _ > (Variable b) = True
---
---   (Constant a) > (Constant b) = a > b
---
---   a >= b = a > b || a == b
---   a <= b = not (a > b)
---   a < b = not (a == b) && a <= b
-
+eliminateMinus (lhs :+: rhs) = eliminateMinus lhs :+: eliminateMinus rhs
+eliminateMinus (lhs :*: rhs) = eliminateMinus lhs :*: eliminateMinus rhs
+eliminateMinus (lhs :/: rhs) = eliminateMinus lhs :/: eliminateMinus rhs
+eliminateMinus (lhs :%: rhs) = eliminateMinus lhs :%: eliminateMinus rhs
+eliminateMinus (lhs :^: rhs) = eliminateMinus lhs :^: eliminateMinus rhs
+eliminateMinus (UnaryMinus exp) = pushMinus (eliminateMinus exp)
+eliminateMinus exp = exp
 
 --------------------------------------------------------------------------
 -- Evaluation                                                           --
@@ -518,26 +613,26 @@ type Valuation = (String, Integer)
 
 getValue :: String -> [Valuation] -> Maybe Integer
 getValue str [] = Nothing
-getValue str ((s,v):vals) = if str == s then Just v else getValue str vals
+getValue str ((s, v):vals) = if str == s then Just v else getValue str vals
 
 setValue :: String -> Integer -> [Valuation] -> [Valuation]
-setValue str n [] = [(str,n)]
-setValue str n ((s,o):vals) = if str == s then ((s,n):vals) else ((s,o):(setValue str n vals))
+setValue str n [] = [(str, n)]
+setValue str n ((s, v):vals) = if str == s then (s, n):vals else (s, v):setValue str n vals
 
 popValue :: String -> [Valuation] -> [Valuation]
 popValue str [] = []
-popValue str ((s,o):vals) = if str == s then vals else ((s,o):popValue str vals)
+popValue str ((s, v):vals) = if str == s then vals else (s, v):popValue str vals
 
 sumValuations :: [Valuation] -> [Valuation] -> [Valuation]
 sumValuations [] bs = bs
 sumValuations (v:as) bs = sumValuations as (sumValuations' v bs)
 
 sumValuations' :: Valuation -> [Valuation] -> [Valuation]
-sumValuations' (str,n) [] = [(str,n)]
-sumValuations' (str,n) ((s,o):vals) =
+sumValuations' (str, n) [] = [(str, n)]
+sumValuations' (str, n) ((s, v):vals) =
   if str == s
-    then ((s, n+o):vals)
-    else sumValuations' (str,n) vals
+    then (s, n+v):vals
+    else sumValuations' (str, n) vals
 
 evalArithExp :: ArithExpression -> [Valuation] -> Integer
 evalArithExp (IntValue n) _ = n
@@ -550,12 +645,12 @@ evalArithExp (Constant str) vals =
     Just v -> v
     Nothing -> error ("Undefined constant: " ++ str)
 evalArithExp (UnaryMinus exp) vals = -(evalArithExp exp vals)
-evalArithExp (lhs :+: rhs) vals = (evalArithExp lhs vals) + (evalArithExp rhs vals)
-evalArithExp (lhs :-: rhs) vals = (evalArithExp lhs vals) - (evalArithExp rhs vals)
-evalArithExp (lhs :*: rhs) vals = (evalArithExp lhs vals) * (evalArithExp rhs vals)
-evalArithExp (lhs :/: rhs) vals = (evalArithExp lhs vals) `div` (evalArithExp rhs vals)
-evalArithExp (lhs :%: rhs) vals = (evalArithExp lhs vals) `mod` (evalArithExp rhs vals)
-evalArithExp (lhs :^: rhs) vals = (evalArithExp lhs vals) ^ (evalArithExp rhs vals)
+evalArithExp (lhs :+: rhs) vals = evalArithExp lhs vals + evalArithExp rhs vals
+evalArithExp (lhs :-: rhs) vals = evalArithExp lhs vals - evalArithExp rhs vals
+evalArithExp (lhs :*: rhs) vals = evalArithExp lhs vals * evalArithExp rhs vals
+evalArithExp (lhs :/: rhs) vals = evalArithExp lhs vals `div` evalArithExp rhs vals
+evalArithExp (lhs :%: rhs) vals = evalArithExp lhs vals `mod` evalArithExp rhs vals
+evalArithExp (lhs :^: rhs) vals = evalArithExp lhs vals ^ evalArithExp rhs vals
 
 evalRelation :: Relation -> [Valuation] -> Bool
 evalRelation (lhs :<: rhs) vals = evalArithExp lhs vals < evalArithExp rhs vals
@@ -566,13 +661,14 @@ evalRelation (lhs :>: rhs) vals = evalRelation (rhs :<: lhs) vals
 evalRelation (lhs :<>: rhs) vals = not (evalRelation (rhs :=: lhs) vals)
 
 evalBoolExpression :: BoolExpression -> [Valuation] -> Bool
-evalBoolExpression (lhs :&: rhs) vals = (evalBoolExpression lhs vals) && (evalBoolExpression rhs vals)
-evalBoolExpression (lhs :|: rhs) vals = (evalBoolExpression lhs vals) || (evalBoolExpression rhs vals)
-evalBoolExpression (lhs :->: rhs) vals = not (evalBoolExpression lhs vals) || (evalBoolExpression rhs vals)
-evalBoolExpression (lhs :<-: rhs) vals = not (evalBoolExpression rhs vals) || (evalBoolExpression lhs vals)
-evalBoolExpression (lhs :==: rhs) vals = (evalBoolExpression lhs vals) == (evalBoolExpression rhs vals)
+evalBoolExpression (lhs :&: rhs) vals = evalBoolExpression lhs vals && evalBoolExpression rhs vals
+evalBoolExpression (lhs :|: rhs) vals = evalBoolExpression lhs vals || evalBoolExpression rhs vals
+evalBoolExpression (lhs :->: rhs) vals = not (evalBoolExpression lhs vals) || evalBoolExpression rhs vals
+evalBoolExpression (lhs :<-: rhs) vals = not (evalBoolExpression rhs vals) || evalBoolExpression lhs vals
+evalBoolExpression (lhs :==: rhs) vals = evalBoolExpression lhs vals == evalBoolExpression rhs vals
 evalBoolExpression (Not exp) vals = not (evalBoolExpression exp vals)
 evalBoolExpression (Compare rel) vals = evalRelation rel vals
+evalBoolExpression (BoolConst c) vals = c
 
 --------------------------------------------------------------------------
 -- Testing                                                              --
