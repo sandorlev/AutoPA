@@ -654,15 +654,57 @@ eliminateMinus exp = exp
 --                   | Const String
 
 simplify :: ArithExprList -> ArithExprList
-simplify e =
-  let e' = thirdLawOfExponents $ secondLawOfExponents $ firstLawOfExponents e
+simplify (Add es) = simplifyAdd es
+simplify (Mul es) = firstLawOfExponents (simplifyMul es)
+simplify e = simplify' e
+
+simplify' :: ArithExprList -> ArithExprList
+simplify' (Add (first:[]))   = first
+simplify' (Mul (first:[]))   = first
+simplify' (Div (first:[]))   = first
+simplify' (Exp base (Val 1)) = base
+simplify' e = e
+
+simplifyAdd :: [ArithExprList] -> ArithExprList
+simplifyAdd es =
+  let (e:es') = simplifyAdd' es 0
   in
-    case e' of
-      Add (first:[]) -> first
-      Mul (first:[]) -> first
-      Div (first:[]) -> first
-      Exp base (Val 1) -> base
-      _ -> e'
+    case es' of
+      [] -> simplify e
+      _ -> Add (simplifyAdd' (e:es') 0)
+
+simplifyAdd' :: [ArithExprList] -> Integer -> [ArithExprList]
+simplifyAdd' [] 0 = []
+simplifyAdd' [] total = [Val total]
+simplifyAdd' (e:es) total =
+  case e of
+    Val n -> simplifyAdd' es (n+total)
+    --Mul es' -> error $ show (simplifyMul' es' 1) --simplifyAdd' ((simplifyMul' es' 1) ++ es) total --simplifyAdd' (es ++ (simplifyMul' es' 1)) total
+    _ -> simplify e : simplifyAdd' es total
+
+--combineTerms :: [ArithExprList] -> String -> [ArithExprList]
+--combineTerms [] var = []
+--combineTerms (e:es) var = combineTerms' e var 1 ++ combineTerms es var
+--
+--combineTerms' :: [ArithExprList] -> String -> Integer -> [ArithExprList]
+--combineTerms' [] var 1 = [Var var]
+--combineTerms' [] var coefficient = [Mul [coefficient, var]]
+--combineTerms' es var coefficient = es
+
+simplifyMul :: [ArithExprList] -> ArithExprList
+simplifyMul es =
+  let (e:es') = simplifyMul' es 1
+  in
+    case es' of
+      [] -> simplify e
+      _ -> Mul (simplifyMul' (e:es') 1)
+
+simplifyMul' :: [ArithExprList] -> Integer -> [ArithExprList]
+simplifyMul' [] coefficient = [Val coefficient]
+simplifyMul' (e:es) coefficient =
+  case e of
+    Val n -> simplifyMul' es (n*coefficient)
+    _ -> simplify e : simplifyMul' es coefficient
 
 firstLawOfExponents :: ArithExprList -> ArithExprList
 firstLawOfExponents (Add es) = Add (firstLawOfExponents' es)
