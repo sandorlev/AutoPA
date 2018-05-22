@@ -653,6 +653,17 @@ eliminateMinus exp = exp
 --                   | Var String
 --                   | Const String
 
+simplify :: ArithExprList -> ArithExprList
+simplify e =
+  let e' = thirdLawOfExponents $ secondLawOfExponents $ firstLawOfExponents e
+  in
+    case e' of
+      Add (first:[]) -> first
+      Mul (first:[]) -> first
+      Div (first:[]) -> first
+      Exp base (Val 1) -> base
+      _ -> e'
+
 firstLawOfExponents :: ArithExprList -> ArithExprList
 firstLawOfExponents (Add es) = Add (firstLawOfExponents' es)
 firstLawOfExponents (Mul es) =
@@ -677,7 +688,7 @@ applyFirstLaw (e:es) =
   let rest = applyFirstLaw' e es
   in
     if rest == es ++ [e]
-      then firstLawOfExponents e : applyFirstLaw es
+      then applyFirstLaw es ++ [firstLawOfExponents e]
       else applyFirstLaw rest
 
 applyFirstLaw' :: ArithExprList -> [ArithExprList] -> [ArithExprList]
@@ -749,7 +760,7 @@ applyThirdLaw (e:es) =
   let rest = applyThirdLaw' e es
   in
     if rest == es ++ [e]
-      then firstLawOfExponents e : applyThirdLaw es
+      then thirdLawOfExponents e : applyThirdLaw es
       else applyThirdLaw rest
 
 applyThirdLaw' :: ArithExprList -> [ArithExprList] -> [ArithExprList]
