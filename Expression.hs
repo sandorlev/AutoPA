@@ -725,6 +725,58 @@ applySecondLaw (Exp base exp) exp2 =
     _ -> Exp base (Mul [exp, exp2])
 applySecondLaw base exp = Exp base exp
 
+thirdLawOfExponents :: ArithExprList -> ArithExprList
+thirdLawOfExponents (Add es) = Add (thirdLawOfExponents' es)
+thirdLawOfExponents (Mul es) = Mul (thirdLawOfExponents' es)
+thirdLawOfExponents (Div es) =
+  let (e:es') = applyThirdLaw es
+  in
+    case es' of
+      [] -> e
+      _ -> Div (e:es')
+thirdLawOfExponents (Mod es) = Mod (thirdLawOfExponents' es)
+thirdLawOfExponents (Exp base exp) = Exp (thirdLawOfExponents base) (thirdLawOfExponents exp)
+thirdLawOfExponents (Min exp) = Min (thirdLawOfExponents exp)
+thirdLawOfExponents e = e
+
+thirdLawOfExponents' :: [ArithExprList] -> [ArithExprList]
+thirdLawOfExponents' [] = []
+thirdLawOfExponents' (e:es) = thirdLawOfExponents e : thirdLawOfExponents' es
+
+applyThirdLaw :: [ArithExprList] -> [ArithExprList]
+applyThirdLaw [] = []
+applyThirdLaw (e:es) =
+  let rest = applyThirdLaw' e es
+  in
+    if rest == es ++ [e]
+      then firstLawOfExponents e : applyThirdLaw es
+      else applyThirdLaw rest
+
+applyThirdLaw' :: ArithExprList -> [ArithExprList] -> [ArithExprList]
+applyThirdLaw' (Exp base exp) ((Exp base2 exp2):rest) =
+  if base == base2
+    then case exp of
+      Add es -> applyThirdLaw' (Exp base (Add (es ++ [Min exp2]))) rest
+      _ -> applyThirdLaw' (Exp base (Add [exp, Min exp2])) rest
+    else Exp base2 exp2 : applyThirdLaw' (Exp base exp) rest
+applyThirdLaw' (Exp base exp) (e:rest) =
+  if base == e
+    then case exp of
+      Add es -> applyThirdLaw' (Exp base (Add (es ++ [Val (-1)]))) rest
+      _ -> applyThirdLaw' (Exp base (Add [exp, Val (-1)])) rest
+    else e : applyThirdLaw' (Exp base exp) rest
+applyThirdLaw' e ((Exp base exp):rest) =
+  if e == base
+    then case exp of
+      Add es -> applyThirdLaw' (Exp base (Add (es ++ [Val (-1)]))) rest
+      _ -> applyThirdLaw' (Exp base (Add [exp, Val (-1)])) rest
+    else Exp base exp : applyThirdLaw' e rest
+applyThirdLaw' e (base:rest) =
+  if e == base
+    then applyThirdLaw' (Exp e (Val 0)) rest
+    else base : applyThirdLaw' e rest
+applyThirdLaw' e [] = [e]
+
 --------------------------------------------------------------------------
 -- Evaluation                                                           --
 --------------------------------------------------------------------------
