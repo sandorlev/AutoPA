@@ -705,6 +705,26 @@ applyFirstLaw' e (base:rest) =
     else base : applyFirstLaw' e rest
 applyFirstLaw' e [] = [e]
 
+secondLawOfExponents :: ArithExprList -> ArithExprList
+secondLawOfExponents (Add es) = Add (secondLawOfExponents' es)
+secondLawOfExponents (Mul es) = Mul (secondLawOfExponents' es)
+secondLawOfExponents (Div es) = Div (secondLawOfExponents' es)
+secondLawOfExponents (Mod es) = Mod (secondLawOfExponents' es)
+secondLawOfExponents (Exp base exp) = applySecondLaw (secondLawOfExponents base) (secondLawOfExponents exp)
+secondLawOfExponents (Min exp) = Min (secondLawOfExponents exp)
+secondLawOfExponents e = e
+
+secondLawOfExponents' :: [ArithExprList] -> [ArithExprList]
+secondLawOfExponents' [] = []
+secondLawOfExponents' (e:es) = secondLawOfExponents e : secondLawOfExponents' es
+
+applySecondLaw :: ArithExprList -> ArithExprList -> ArithExprList
+applySecondLaw (Exp base exp) exp2 =
+  case exp of
+    Mul es -> Exp base (Mul (es ++ [exp2]))
+    _ -> Exp base (Mul [exp, exp2])
+applySecondLaw base exp = Exp base exp
+
 --------------------------------------------------------------------------
 -- Evaluation                                                           --
 --------------------------------------------------------------------------
