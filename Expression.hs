@@ -7,7 +7,7 @@ import System.Random
 --------------------------------------------------------------------------
 
 data Token = TokPlus | TokMinus
-           | TokTimes | TokDiv | TokMod | TokExp
+           | TokTimes | TokDiv | TokMod
            | TokLT | TokLEQ | TokEQ | TokGEQ | TokGT | TokNEQ
            | TokAnd | TokOr | TokNot | TokTrue | TokFalse
            | TokEquiv | TokImplies | TokFollows
@@ -50,7 +50,6 @@ lexer (c : cs)
   | c == '*' = TokTimes:lexer cs
   | c == '/' = TokDiv:lexer cs
   | c == '%' = TokMod:lexer cs
-  | c == '^' = TokExp:lexer cs
   -- literals
   | isLower c = TokVariable (c : takeWhile isAlpha cs) : lexer (dropWhile isAlpha cs)
   | isUpper c = TokConstant (c : takeWhile isAlpha cs) : lexer (dropWhile isAlpha cs)
@@ -74,7 +73,6 @@ data ArithExpression = ArithExpression :+: ArithExpression
                      | ArithExpression :*: ArithExpression
                      | ArithExpression :/: ArithExpression
                      | ArithExpression :%: ArithExpression
-                     | ArithExpression :^: ArithExpression
                      | UnaryMinus ArithExpression
                      | IntValue Integer
                      | Variable String
@@ -92,7 +90,6 @@ instance Show ArithExpression where
   show (lhs :*: rhs) = parens lhs ++ "*" ++ parens rhs
   show (lhs :/: rhs) = parens lhs ++ "/" ++ parens rhs
   show (lhs :%: rhs) = parens lhs ++ "%" ++ parens rhs
-  show (lhs :^: rhs) = parens lhs ++ "^" ++ parens rhs
   show (UnaryMinus exp) = "-" ++ parens exp
   show exp = parens exp
 
@@ -121,39 +118,23 @@ parseE' lhs (tok : tokens) =
       TokMinus -> parseE' (lhs :-: rhs) rest
       _ -> (lhs, (tok : tokens))
 
--- T -> F {T'}
+-- T -> P {T'}
 parseT :: [Token] -> (ArithExpression, [Token])
 parseT tokens =
-  let (lhs, rest) = parseF tokens
+  let (lhs, rest) = parseP tokens
   in parseT' lhs rest
 
--- T' -> ("*" | "/" | "%") F {T'}
+-- T' -> ("*" | "/" | "%") P {T'}
 -- T' -> epsilon
 parseT' :: ArithExpression -> [Token] -> (ArithExpression, [Token])
 parseT' lhs (tok : tokens) =
-  let (rhs, rest) = parseF tokens
+  let (rhs, rest) = parseP tokens
   in
     case tok of
       TokTimes -> parseT' (lhs :*: rhs) rest
       TokDiv -> parseT' (lhs :/: rhs) rest
       TokMod -> parseT' (lhs :%: rhs) rest
       _ -> (lhs, (tok : tokens))
-
--- F -> P {F'}
-parseF :: [Token] -> (ArithExpression, [Token])
-parseF tokens =
-  let (lhs, rest) = parseP tokens
-  in parseF' lhs rest
-
--- F' -> "^" F
--- F' -> epsilon
-parseF' :: ArithExpression -> [Token] -> (ArithExpression, [Token])
-parseF' base (tok : tokens) =
-  case tok of
-    TokExp ->
-      let (exp, rest) = parseF tokens
-      in (base :^: exp, rest)
-    _ -> (base, (tok : tokens))
 
 -- P -> <Var>
 -- P -> <Const>
@@ -186,11 +167,12 @@ data ArithExprList = Add [ArithExprList]
                    | Mul [ArithExprList]
                    | Div [ArithExprList]
                    | Mod [ArithExprList]
-                   | Exp ArithExprList ArithExprList
                    | Min ArithExprList
                    | Val Integer
                    | Var String
                    | Const String
+--                   -- Coefficient & Variables makes a polynomial (no exponents)
+--                   | PolyNode Integer [String]
 
 ps :: ArithExprList -> String
 ps (Val n) = show n
@@ -207,7 +189,6 @@ instance Show ArithExprList where
   show (Div (e:es)) = ps e ++ "/" ++ show (Div es)
   show (Mod (e:[])) = ps e
   show (Mod (e:es)) = ps e ++ "%" ++ show (Mod es)
-  show (Exp lhs rhs) = ps lhs ++ "^" ++ ps rhs
   show (Min e) = "-" ++ ps e
   show e = ps e
 
@@ -231,10 +212,6 @@ instance Eq ArithExprList where
   (Mod (l:ls)) == (Mod (r:rs)) = l == r && Mod ls == Mod rs
   (Mod _) == _ = False
   _ == (Mod _) = False
-
-  (Exp base1 exp1) == (Exp base2 exp2) = base1 == base2 && exp1 == exp2
-  (Exp _ _) == _ = False
-  _ == (Exp _ _) = False
 
   (Min l) == (Min r) = l == r
   (Min _) == _ = False
@@ -281,48 +258,34 @@ parseE2' lhs (TokPlus : tokens) =
       _ -> parseE2' (Add [lhs, rhs]) rest
 parseE2' lhs tokens = (lhs, tokens)
 
--- T2 -> F2 {T2'}
+-- T2 -> P2 {T2'}
 parseT2 :: [Token] -> (ArithExprList, [Token])
 parseT2 tokens =
-  let (lhs, rest) = parseF2 tokens
+  let (lhs, rest) = parseP2 tokens
   in parseT2' lhs rest
 
--- T2' -> ("*" | "/" | "%") F2 {T2'}
+-- T2' -> ("*" | "/" | "%") P2 {T2'}
 -- T2' -> epsilon
 parseT2' :: ArithExprList -> [Token] -> (ArithExprList, [Token])
 parseT2' lhs (TokTimes : tokens) =
-  let (rhs, rest) = parseF2 tokens
+  let (rhs, rest) = parseP2 tokens
   in
     case lhs of
       Mul es -> parseT2' (Mul (es ++ [rhs])) rest
       _ -> parseT2' (Mul [lhs, rhs]) rest
 parseT2' lhs (TokDiv : tokens) =
-  let (rhs, rest) = parseF2 tokens
+  let (rhs, rest) = parseP2 tokens
   in
     case lhs of
       Div es -> parseT2' (Div (es ++ [rhs])) rest
       _ -> parseT2' (Div [lhs, rhs]) rest
 parseT2' lhs (TokMod : tokens) =
-  let (rhs, rest) = parseF2 tokens
+  let (rhs, rest) = parseP2 tokens
   in
     case lhs of
       Mod es -> parseT2' (Mod (es ++ [rhs])) rest
       _ -> parseT2' (Mod [lhs, rhs]) rest
 parseT2' lhs tokens = (lhs, tokens)
-
--- F2 -> P2 {F2'}
-parseF2 :: [Token] -> (ArithExprList, [Token])
-parseF2 tokens =
-  let (lhs, rest) = parseP2 tokens
-  in parseF2' lhs rest
-
--- F2' -> "^" F2
--- F2' -> epsilon
-parseF2' :: ArithExprList -> [Token] -> (ArithExprList, [Token])
-parseF2' base (TokExp : tokens) =
-  let (exp, rest) = parseF2 tokens
-  in (Exp base exp, rest)
-parseF2' lhs tokens = (lhs, tokens)
 
 -- P2 -> <Var>
 -- P2 -> <Const>
@@ -495,19 +458,22 @@ parseU (tok : tokens) =
 -- Conjunctive Normal From                                              --
 --------------------------------------------------------------------------
 
-eliminateFollowsAndEquiv :: BoolExpression -> BoolExpression
-eliminateFollowsAndEquiv (lhs :==: rhs) =
-  let (l, r) = (eliminateFollowsAndEquiv lhs, eliminateFollowsAndEquiv rhs)
+eliminateEquiv :: BoolExpression -> BoolExpression
+eliminateEquiv (lhs :==: rhs) =
+  let (l, r) = (eliminateEquiv lhs, eliminateEquiv rhs)
   in (l :->: r) :&: (r :->: l)
--- Is this intentional? Maybe rhs -> lhs? check evaluateBoolExpression too
-eliminateFollowsAndEquiv (lhs :<-: rhs) = (eliminateFollowsAndEquiv lhs) :->: (eliminateFollowsAndEquiv rhs)
-eliminateFollowsAndEquiv (Not e) = Not (eliminateFollowsAndEquiv e)
-eliminateFollowsAndEquiv e = e
+eliminateEquiv (lhs :|: rhs) = (eliminateEquiv lhs) :|: (eliminateEquiv rhs)
+eliminateEquiv (lhs :&: rhs) = (eliminateEquiv lhs) :&: (eliminateEquiv rhs)
+eliminateEquiv (lhs :->: rhs) = (eliminateEquiv lhs) :->: (eliminateEquiv rhs)
+eliminateEquiv (lhs :<-: rhs) = (eliminateEquiv lhs) :<-: (eliminateEquiv rhs)
+eliminateEquiv (Not e) = Not (eliminateEquiv e)
+eliminateEquiv e = e
 
 eliminateImplication :: BoolExpression -> BoolExpression
 eliminateImplication (lhs :->: rhs) =
   let (l, r) = (eliminateImplication lhs, eliminateImplication rhs)
   in (Not l) :|: r
+eliminateImplication (lhs :<-: rhs) = eliminateImplication (rhs :->: lhs)
 eliminateImplication (Not e) = Not (eliminateImplication e)
 eliminateImplication e = e
 
@@ -531,7 +497,7 @@ distributeOrOverAnd (lhs :&: rhs) = distributeOrOverAnd lhs :&: distributeOrOver
 distributeOrOverAnd e = e
 
 cnf :: BoolExpression -> BoolExpression
-cnf = distributeOrOverAnd.pushAndEliminateNot.eliminateImplication.eliminateFollowsAndEquiv
+cnf = distributeOrOverAnd.pushAndEliminateNot.eliminateImplication.eliminateEquiv
 
 cnfstr :: String -> BoolExpression
 cnfstr s = cnf $ parseBoolExpression s
@@ -580,7 +546,6 @@ wpArithExp ass (lhs :-: rhs) = wpArithExp ass lhs :-: wpArithExp ass rhs
 wpArithExp ass (lhs :*: rhs) = wpArithExp ass lhs :*: wpArithExp ass rhs
 wpArithExp ass (lhs :/: rhs) = wpArithExp ass lhs :/: wpArithExp ass rhs
 wpArithExp ass (lhs :%: rhs) = wpArithExp ass lhs :%: wpArithExp ass rhs
-wpArithExp ass (lhs :^: rhs) = wpArithExp ass lhs :^: wpArithExp ass rhs
 wpArithExp ass (UnaryMinus exp) = UnaryMinus (wpArithExp ass exp)
 wpArithExp (Assign var e) (Variable str) =
   if str == var
@@ -625,7 +590,6 @@ pushMinus (lhs :-: rhs) = pushMinus lhs :+: pushMinus rhs
 pushMinus (lhs :*: rhs) = pushMinus lhs :*: rhs
 pushMinus (lhs :/: rhs) = pushMinus lhs :/: rhs
 pushMinus (lhs :%: rhs) = pushMinus lhs :%: rhs
-pushMinus (lhs :^: rhs) = pushMinus lhs :^: rhs
 pushMinus (UnaryMinus exp) = exp
 pushMinus (IntValue n) = UnaryMinus (IntValue n)
 pushMinus (Variable str) = UnaryMinus (Variable str)
@@ -639,30 +603,26 @@ eliminateMinus (lhs :+: rhs) = eliminateMinus lhs :+: eliminateMinus rhs
 eliminateMinus (lhs :*: rhs) = eliminateMinus lhs :*: eliminateMinus rhs
 eliminateMinus (lhs :/: rhs) = eliminateMinus lhs :/: eliminateMinus rhs
 eliminateMinus (lhs :%: rhs) = eliminateMinus lhs :%: eliminateMinus rhs
-eliminateMinus (lhs :^: rhs) = eliminateMinus lhs :^: eliminateMinus rhs
 eliminateMinus (UnaryMinus exp) = pushMinus (eliminateMinus exp)
 eliminateMinus exp = exp
 
---data ArithExprList = Add [ArithExprList]
---                   | Mul [ArithExprList]
---                   | Div [ArithExprList]
---                   | Mod [ArithExprList]
---                   | Exp ArithExprList ArithExprList
---                   | Min ArithExprList
---                   | Val Integer
---                   | Var String
---                   | Const String
+reorderRelation :: Relation -> Relation
+reorderRelation (lhs :<: rhs) = (lhs :-: rhs) :<: IntValue 0
+reorderRelation (lhs :<=: rhs) = (lhs :-: rhs) :<=: IntValue 0
+reorderRelation (lhs :=: rhs) = (lhs :-: rhs) :=: IntValue 0
+reorderRelation (lhs :>: rhs) = reorderRelation (rhs :<: lhs)
+reorderRelation (lhs :>=: rhs) = reorderRelation (rhs :<=: lhs)
 
+-- SIMPLIFICATION ON ARITHEXPRLISTS
 simplify :: ArithExprList -> ArithExprList
 simplify (Add es) = simplifyAdd es
-simplify (Mul es) = firstLawOfExponents (simplifyMul es)
+simplify (Mul es) = simplifyMul es
 simplify e = simplify' e
 
 simplify' :: ArithExprList -> ArithExprList
-simplify' (Add (first:[]))   = first
-simplify' (Mul (first:[]))   = first
-simplify' (Div (first:[]))   = first
-simplify' (Exp base (Val 1)) = base
+simplify' (Add (first:[])) = first
+simplify' (Mul (first:[])) = first
+simplify' (Div (first:[])) = first
 simplify' e = e
 
 simplifyAdd :: [ArithExprList] -> ArithExprList
@@ -705,130 +665,6 @@ simplifyMul' (e:es) coefficient =
   case e of
     Val n -> simplifyMul' es (n*coefficient)
     _ -> simplify e : simplifyMul' es coefficient
-
-firstLawOfExponents :: ArithExprList -> ArithExprList
-firstLawOfExponents (Add es) = Add (firstLawOfExponents' es)
-firstLawOfExponents (Mul es) =
-  let (e:es') = applyFirstLaw es
-  in
-    case es' of
-      [] -> e
-      _ -> Mul (e:es')
-firstLawOfExponents (Div es) = Div (firstLawOfExponents' es)
-firstLawOfExponents (Mod es) = Mod (firstLawOfExponents' es)
-firstLawOfExponents (Exp base exp) = Exp (firstLawOfExponents base) (firstLawOfExponents exp)
-firstLawOfExponents (Min exp) = Min (firstLawOfExponents exp)
-firstLawOfExponents e = e
-
-firstLawOfExponents' :: [ArithExprList] -> [ArithExprList]
-firstLawOfExponents' [] = []
-firstLawOfExponents' (e:es) = firstLawOfExponents e : firstLawOfExponents' es
-
-applyFirstLaw :: [ArithExprList] -> [ArithExprList]
-applyFirstLaw [] = []
-applyFirstLaw (e:es) =
-  let rest = applyFirstLaw' e es
-  in
-    if rest == es ++ [e]
-      then applyFirstLaw es ++ [firstLawOfExponents e]
-      else applyFirstLaw rest
-
-applyFirstLaw' :: ArithExprList -> [ArithExprList] -> [ArithExprList]
-applyFirstLaw' (Exp base exp) ((Exp base2 exp2):rest) =
-  if base == base2
-    then case exp of
-      Add es -> applyFirstLaw' (Exp base (Add (es ++ [exp2]))) rest
-      _ -> applyFirstLaw' (Exp base (Add [exp, exp2])) rest
-    else Exp base2 exp2 : applyFirstLaw' (Exp base exp) rest
-applyFirstLaw' (Exp base exp) (e:rest) =
-  if base == e
-    then case exp of
-      Add es -> applyFirstLaw' (Exp base (Add (es ++ [Val 1]))) rest
-      _ -> applyFirstLaw' (Exp base (Add [exp, Val 1])) rest
-    else e : applyFirstLaw' (Exp base exp) rest
-applyFirstLaw' e ((Exp base exp):rest) =
-  if e == base
-    then case exp of
-      Add es -> applyFirstLaw' (Exp base (Add (es ++ [Val 1]))) rest
-      _ -> applyFirstLaw' (Exp base (Add [exp, Val 1])) rest
-    else Exp base exp : applyFirstLaw' e rest
-applyFirstLaw' e (base:rest) =
-  if e == base
-    then applyFirstLaw' (Exp e (Val 2)) rest
-    else base : applyFirstLaw' e rest
-applyFirstLaw' e [] = [e]
-
-secondLawOfExponents :: ArithExprList -> ArithExprList
-secondLawOfExponents (Add es) = Add (secondLawOfExponents' es)
-secondLawOfExponents (Mul es) = Mul (secondLawOfExponents' es)
-secondLawOfExponents (Div es) = Div (secondLawOfExponents' es)
-secondLawOfExponents (Mod es) = Mod (secondLawOfExponents' es)
-secondLawOfExponents (Exp base exp) = applySecondLaw (secondLawOfExponents base) (secondLawOfExponents exp)
-secondLawOfExponents (Min exp) = Min (secondLawOfExponents exp)
-secondLawOfExponents e = e
-
-secondLawOfExponents' :: [ArithExprList] -> [ArithExprList]
-secondLawOfExponents' [] = []
-secondLawOfExponents' (e:es) = secondLawOfExponents e : secondLawOfExponents' es
-
-applySecondLaw :: ArithExprList -> ArithExprList -> ArithExprList
-applySecondLaw (Exp base exp) exp2 =
-  case exp of
-    Mul es -> Exp base (Mul (es ++ [exp2]))
-    _ -> Exp base (Mul [exp, exp2])
-applySecondLaw base exp = Exp base exp
-
-thirdLawOfExponents :: ArithExprList -> ArithExprList
-thirdLawOfExponents (Add es) = Add (thirdLawOfExponents' es)
-thirdLawOfExponents (Mul es) = Mul (thirdLawOfExponents' es)
-thirdLawOfExponents (Div es) =
-  let (e:es') = applyThirdLaw es
-  in
-    case es' of
-      [] -> e
-      _ -> Div (e:es')
-thirdLawOfExponents (Mod es) = Mod (thirdLawOfExponents' es)
-thirdLawOfExponents (Exp base exp) = Exp (thirdLawOfExponents base) (thirdLawOfExponents exp)
-thirdLawOfExponents (Min exp) = Min (thirdLawOfExponents exp)
-thirdLawOfExponents e = e
-
-thirdLawOfExponents' :: [ArithExprList] -> [ArithExprList]
-thirdLawOfExponents' [] = []
-thirdLawOfExponents' (e:es) = thirdLawOfExponents e : thirdLawOfExponents' es
-
-applyThirdLaw :: [ArithExprList] -> [ArithExprList]
-applyThirdLaw [] = []
-applyThirdLaw (e:es) =
-  let rest = applyThirdLaw' e es
-  in
-    if rest == es ++ [e]
-      then thirdLawOfExponents e : applyThirdLaw es
-      else applyThirdLaw rest
-
-applyThirdLaw' :: ArithExprList -> [ArithExprList] -> [ArithExprList]
-applyThirdLaw' (Exp base exp) ((Exp base2 exp2):rest) =
-  if base == base2
-    then case exp of
-      Add es -> applyThirdLaw' (Exp base (Add (es ++ [Min exp2]))) rest
-      _ -> applyThirdLaw' (Exp base (Add [exp, Min exp2])) rest
-    else Exp base2 exp2 : applyThirdLaw' (Exp base exp) rest
-applyThirdLaw' (Exp base exp) (e:rest) =
-  if base == e
-    then case exp of
-      Add es -> applyThirdLaw' (Exp base (Add (es ++ [Val (-1)]))) rest
-      _ -> applyThirdLaw' (Exp base (Add [exp, Val (-1)])) rest
-    else e : applyThirdLaw' (Exp base exp) rest
-applyThirdLaw' e ((Exp base exp):rest) =
-  if e == base
-    then case exp of
-      Add es -> applyThirdLaw' (Exp base (Add (es ++ [Val (-1)]))) rest
-      _ -> applyThirdLaw' (Exp base (Add [exp, Val (-1)])) rest
-    else Exp base exp : applyThirdLaw' e rest
-applyThirdLaw' e (base:rest) =
-  if e == base
-    then applyThirdLaw' (Exp e (Val 0)) rest
-    else base : applyThirdLaw' e rest
-applyThirdLaw' e [] = [e]
 
 --------------------------------------------------------------------------
 -- Evaluation                                                           --
@@ -875,7 +711,6 @@ evalArithExp (lhs :-: rhs) vals = evalArithExp lhs vals - evalArithExp rhs vals
 evalArithExp (lhs :*: rhs) vals = evalArithExp lhs vals * evalArithExp rhs vals
 evalArithExp (lhs :/: rhs) vals = evalArithExp lhs vals `div` evalArithExp rhs vals
 evalArithExp (lhs :%: rhs) vals = evalArithExp lhs vals `mod` evalArithExp rhs vals
-evalArithExp (lhs :^: rhs) vals = evalArithExp lhs vals ^ evalArithExp rhs vals
 
 evalRelation :: Relation -> [Valuation] -> Bool
 evalRelation (lhs :<: rhs) vals = evalArithExp lhs vals < evalArithExp rhs vals
@@ -929,7 +764,6 @@ listExpIdentifiers' (lhs :-: rhs) ids = listExpIdentifiers' lhs ids ++ listExpId
 listExpIdentifiers' (lhs :*: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
 listExpIdentifiers' (lhs :/: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
 listExpIdentifiers' (lhs :%: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
-listExpIdentifiers' (lhs :^: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
 listExpIdentifiers' (UnaryMinus exp) ids = listExpIdentifiers' exp ids
 listExpIdentifiers' (Variable var) ids = (var : ids)
 listExpIdentifiers' (Constant const) ids = (const : ids)
