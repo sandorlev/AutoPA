@@ -3,16 +3,26 @@ import Data.List
 import System.Random
 
 --------------------------------------------------------------------------
+-- Knowledge Base                                                       --
+--------------------------------------------------------------------------
+
+knowledgeBase = [
+       "#x=#y -> #y=#x"
+     ]
+
+
+--------------------------------------------------------------------------
 -- Lexer                                                                --
 --------------------------------------------------------------------------
 
 data Token = TokPlus | TokMinus
-           | TokTimes | TokDiv | TokMod
+           | TokTimes | TokDiv | TokMod | TokExp
            | TokLT | TokLEQ | TokEQ | TokGEQ | TokGT | TokNEQ
            | TokAnd | TokOr | TokNot | TokTrue | TokFalse
            | TokEquiv | TokImplies | TokFollows
            | TokLpar | TokRpar
            | TokVariable String
+           | TokBoundVariable String
            | TokConstant String
            | TokIntValue Integer
            | TokAssign
@@ -50,10 +60,12 @@ lexer (c : cs)
   | c == '*' = TokTimes:lexer cs
   | c == '/' = TokDiv:lexer cs
   | c == '%' = TokMod:lexer cs
+  | c == '^' = TokExp:lexer cs
   -- literals
-  | isLower c = TokVariable (c : takeWhile isAlpha cs) : lexer (dropWhile isAlpha cs)
-  | isUpper c = TokConstant (c : takeWhile isAlpha cs) : lexer (dropWhile isAlpha cs)
-  | isDigit c = TokIntValue (read (c : takeWhile isDigit cs)) : lexer (dropWhile isDigit cs)
+  | c == '#' && cs/=[] && isAlpha(head cs) = (TokBoundVariable (takeWhile isAlphaNum cs)) : lexer (dropWhile isAlphaNum cs)
+  | isLower c = (TokVariable (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
+  | isUpper c = (TokConstant (c : takeWhile isAlpha cs)) : lexer (dropWhile isAlpha cs)
+  | isDigit c = (TokIntValue (read (c : takeWhile isDigit cs))) : lexer (dropWhile isDigit cs)
   -- compare operators
   | matchHead "<=" (c:cs) = TokLEQ : lexer (drop 1 cs)
   | matchHead ">=" (c:cs) = TokGEQ : lexer (drop 1 cs)
@@ -62,36 +74,54 @@ lexer (c : cs)
   | c == '<' = TokLT:lexer cs
   | c == '>' = TokGT:lexer cs
   | c == '=' = TokEQ:lexer cs
-  | otherwise = error ("Invalid character " ++ [c])
+  | otherwise = error ("Lexical error: Invalid character '" ++ [c] ++ "'")
 
 --------------------------------------------------------------------------
 -- ArithExpression                                                      --
 --------------------------------------------------------------------------
 
-data ArithExpression = ArithExpression :+: ArithExpression
-                     | ArithExpression :-: ArithExpression
-                     | ArithExpression :*: ArithExpression
-                     | ArithExpression :/: ArithExpression
-                     | ArithExpression :%: ArithExpression
+data ArithExpression = Plus ArithExpression ArithExpression
+                     | Minus ArithExpression ArithExpression
+                     | Times ArithExpression ArithExpression
+                     | Div ArithExpression ArithExpression
+                     | Mod ArithExpression ArithExpression
+                     | Exp ArithExpression ArithExpression
                      | UnaryMinus ArithExpression
                      | IntValue Integer
-                     | Variable String
                      | Constant String
+                     | Variable String
+                     | BoundVariable String
 
 parens :: ArithExpression -> String
 parens (IntValue n) = show n
 parens (Variable str) = str
+parens (BoundVariable str) = '#':str
 parens (Constant str) = str
 parens exp = "(" ++ show exp ++ ")"
 
 instance Show ArithExpression where
-  show (lhs :+: rhs) = parens lhs ++ "+" ++ parens rhs
-  show (lhs :-: rhs) = parens lhs ++ "-" ++ parens rhs
-  show (lhs :*: rhs) = parens lhs ++ "*" ++ parens rhs
-  show (lhs :/: rhs) = parens lhs ++ "/" ++ parens rhs
-  show (lhs :%: rhs) = parens lhs ++ "%" ++ parens rhs
+  show (Plus lhs rhs) = parens lhs ++ "+" ++ parens rhs
+  show (Minus lhs rhs) = parens lhs ++ "-" ++ parens rhs
+  show (Times lhs rhs) = parens lhs ++ "*" ++ parens rhs
+  show (Div lhs rhs) = parens lhs ++ "/" ++ parens rhs
+  show (Mod lhs rhs) = parens lhs ++ "%" ++ parens rhs
+  show (Exp lhs rhs) = parens lhs ++ "^" ++ parens rhs
   show (UnaryMinus exp) = "-" ++ parens exp
   show exp = parens exp
+
+instance Eq ArithExpression where
+  Plus  l0 r0 == Plus l1 r1           = l0 == l1 && r0 == r1
+  Minus l0 r0 == Minus l1 r1          = l0 == l1 && r0 == r1
+  Times l0 r0 == Times l1 r1          = l0 == l1 && r0 == r1
+  Div   l0 r0 == Div l1 r1            = l0 == l1 && r0 == r1
+  Mod   l0 r0 == Mod l1 r1            = l0 == l1 && r0 == r1
+  Exp   l0 r0 == Exp l1 r1            = l0 == l1 && r0 == r1
+  UnaryMinus e0== UnaryMinus e1       = e0 == e1
+  IntValue x == IntValue y            = x == y
+  Constant x == Constant y            = x == y
+  Variable x == Variable y            = x == y
+  BoundVariable x == BoundVariable y  = x == y
+  e0 == e1                            = False
 
 parseArithExpression :: String -> ArithExpression
 parseArithExpression str =
@@ -114,29 +144,46 @@ parseE' lhs (tok : tokens) =
   let (rhs, rest) = parseT tokens
   in
     case tok of
-      TokPlus -> parseE' (lhs :+: rhs) rest
-      TokMinus -> parseE' (lhs :-: rhs) rest
+      TokPlus -> parseE' (Plus lhs rhs) rest
+      TokMinus -> parseE' (Minus lhs rhs) rest
       _ -> (lhs, (tok : tokens))
 
--- T -> P {T'}
+-- T -> F {T'}
 parseT :: [Token] -> (ArithExpression, [Token])
 parseT tokens =
-  let (lhs, rest) = parseP tokens
+  let (lhs, rest) = parseF tokens
   in parseT' lhs rest
 
--- T' -> ("*" | "/" | "%") P {T'}
+-- T' -> ("*" | "/" | "%") F
 -- T' -> epsilon
 parseT' :: ArithExpression -> [Token] -> (ArithExpression, [Token])
 parseT' lhs (tok : tokens) =
-  let (rhs, rest) = parseP tokens
+  let (rhs, rest) = parseF tokens
   in
     case tok of
-      TokTimes -> parseT' (lhs :*: rhs) rest
-      TokDiv -> parseT' (lhs :/: rhs) rest
-      TokMod -> parseT' (lhs :%: rhs) rest
+      TokTimes -> parseT' (Times lhs rhs) rest
+      TokDiv -> parseT' (Div lhs rhs) rest
+      TokMod -> parseT' (Mod lhs rhs) rest
       _ -> (lhs, (tok : tokens))
 
+-- F -> P {F'}
+parseF :: [Token] -> (ArithExpression, [Token])
+parseF tokens =
+  let (lhs, rest) = parseP tokens
+  in parseF' lhs rest
+
+-- F' -> "^" F
+-- F' -> epsilon
+parseF' :: ArithExpression -> [Token] -> (ArithExpression, [Token])
+parseF' lhs (tok : tokens) =
+  case tok of
+    TokExp ->
+      let (rhs, rest) = parseF tokens
+      in ((Exp lhs rhs), rest)
+    _ -> (lhs, (tok : tokens))
+
 -- P -> <Var>
+-- P -> <BoundVar>
 -- P -> <Const>
 -- P -> <Integer>
 -- P -> "(" E ")"
@@ -145,9 +192,10 @@ parseP :: [Token] -> (ArithExpression, [Token])
 parseP [] = error "Token expected"
 parseP (tok : tokens) =
   case tok of
-    TokVariable str -> (Variable str, tokens)
-    TokConstant str -> (Constant str, tokens)
-    TokIntValue n -> (IntValue n, tokens)
+    (TokVariable str) -> ((Variable str), tokens)
+    (TokBoundVariable str) -> ((BoundVariable str), tokens)
+    (TokConstant str) -> ((Constant str), tokens)
+    (TokIntValue n) -> ((IntValue n), tokens)
     TokLpar ->
       let (exp, (next : rest)) = parseE tokens
       in
@@ -156,158 +204,7 @@ parseP (tok : tokens) =
           else (exp, rest)
     TokMinus ->
       let (exp, rest) = parseT tokens
-      in (UnaryMinus exp, rest)
-    _ -> error ("Syntax Error: " ++ show tok)
-
---------------------------------------------------------------------------
--- ArithExprList                                                        --
---------------------------------------------------------------------------
-
-data ArithExprList = Add [ArithExprList]
-                   | Mul [ArithExprList]
-                   | Div [ArithExprList]
-                   | Mod [ArithExprList]
-                   | Min ArithExprList
-                   | Val Integer
-                   | Var String
-                   | Const String
---                   -- Coefficient & Variables makes a polynomial (no exponents)
---                   | PolyNode Integer [String]
-
-ps :: ArithExprList -> String
-ps (Val n) = show n
-ps (Var v) = v
-ps (Const c) = c
-ps exp = "(" ++ show exp ++ ")"
-
-instance Show ArithExprList where
-  show (Add (e:[])) = ps e
-  show (Add (e:es)) = ps e ++ "+" ++ show (Add es)
-  show (Mul (e:[])) = ps e
-  show (Mul (e:es)) = ps e ++ "*" ++ show (Mul es)
-  show (Div (e:[])) = ps e
-  show (Div (e:es)) = ps e ++ "/" ++ show (Div es)
-  show (Mod (e:[])) = ps e
-  show (Mod (e:es)) = ps e ++ "%" ++ show (Mod es)
-  show (Min e) = "-" ++ ps e
-  show e = ps e
-
-instance Eq ArithExprList where
-  (Add []) == (Add []) = True
-  (Add (l:ls)) == (Add (r:rs)) = l == r && Add ls == Add rs
-  (Add _) == _ = False
-  _ == (Add _) = False
-
-  (Mul []) == (Mul []) = True
-  (Mul (l:ls)) == (Mul (r:rs)) = l == r && Mul ls == Mul rs
-  (Mul _) == _ = False
-  _ == (Mul _) = False
-
-  (Div []) == (Div []) = True
-  (Div (l:ls)) == (Div (r:rs)) = l == r && Div ls == Div rs
-  (Div _) == _ = False
-  _ == (Div _) = False
-
-  (Mod []) == (Mod []) = True
-  (Mod (l:ls)) == (Mod (r:rs)) = l == r && Mod ls == Mod rs
-  (Mod _) == _ = False
-  _ == (Mod _) = False
-
-  (Min l) == (Min r) = l == r
-  (Min _) == _ = False
-  _ == (Min _) = False
-
-  (Val l) == (Val r) = l == r
-  (Val _) == _ = False
-  _ == (Val _) = False
-
-  (Var l) == (Var r) = l == r
-  (Var _) == _ = False
-  _ == (Var _) = False
-
-  (Const l) == (Const r) = l == r
-
-arithExpressionToList :: ArithExpression -> ArithExprList
-arithExpressionToList exp = parseArithExprList' (show (eliminateMinus exp))
-
-parseArithExprList :: String -> ArithExprList
-parseArithExprList str = arithExpressionToList (parseArithExpression str)
-
-parseArithExprList' :: String -> ArithExprList
-parseArithExprList' str =
-  let (exp, (tok : tokens)) = parseE2 (lexer str)
-  in
-    case tok of
-      TokEnd -> exp
-      _ -> error ("Unused tokens: " ++ show (tok : tokens))
-
--- E2 -> T2 {E2'}
-parseE2 :: [Token] -> (ArithExprList, [Token])
-parseE2 tokens =
-  let (lhs, rest) = parseT2 tokens
-  in parseE2' lhs rest
-
--- E2' -> "+" T2 {E2'}
--- E2' -> epsilon
-parseE2' :: ArithExprList -> [Token] -> (ArithExprList, [Token])
-parseE2' lhs (TokPlus : tokens) =
-  let (rhs, rest) = parseT2 tokens
-  in
-    case lhs of
-      Add es -> parseE2' (Add (es ++ [rhs])) rest
-      _ -> parseE2' (Add [lhs, rhs]) rest
-parseE2' lhs tokens = (lhs, tokens)
-
--- T2 -> P2 {T2'}
-parseT2 :: [Token] -> (ArithExprList, [Token])
-parseT2 tokens =
-  let (lhs, rest) = parseP2 tokens
-  in parseT2' lhs rest
-
--- T2' -> ("*" | "/" | "%") P2 {T2'}
--- T2' -> epsilon
-parseT2' :: ArithExprList -> [Token] -> (ArithExprList, [Token])
-parseT2' lhs (TokTimes : tokens) =
-  let (rhs, rest) = parseP2 tokens
-  in
-    case lhs of
-      Mul es -> parseT2' (Mul (es ++ [rhs])) rest
-      _ -> parseT2' (Mul [lhs, rhs]) rest
-parseT2' lhs (TokDiv : tokens) =
-  let (rhs, rest) = parseP2 tokens
-  in
-    case lhs of
-      Div es -> parseT2' (Div (es ++ [rhs])) rest
-      _ -> parseT2' (Div [lhs, rhs]) rest
-parseT2' lhs (TokMod : tokens) =
-  let (rhs, rest) = parseP2 tokens
-  in
-    case lhs of
-      Mod es -> parseT2' (Mod (es ++ [rhs])) rest
-      _ -> parseT2' (Mod [lhs, rhs]) rest
-parseT2' lhs tokens = (lhs, tokens)
-
--- P2 -> <Var>
--- P2 -> <Const>
--- P2 -> <Val>
--- P2 -> "(" E2 ")"
--- P2 -> "-" T2
-parseP2 :: [Token] -> (ArithExprList, [Token])
-parseP2 [] = error "Token expected"
-parseP2 (tok : tokens) =
-  case tok of
-    TokVariable str -> (Var str, tokens)
-    TokConstant str -> (Const str, tokens)
-    TokIntValue n -> (Val n, tokens)
-    TokLpar ->
-      let (exp, (next : rest)) = parseE2 tokens
-      in
-        if next /= TokRpar
-          then error "Missing right parenthesis"
-          else (exp, rest)
-    TokMinus ->
-      let (exp, rest) = parseT2 tokens
-      in (Min exp, rest)
+      in ((UnaryMinus exp), rest)
     _ -> error ("Syntax Error: " ++ show tok)
 
 --------------------------------------------------------------------------
@@ -343,33 +240,33 @@ parseR tokens =
       (rhs, rest) = parseE toks
   in
     case tok of
-      TokLT -> (lhs :<: rhs, rest)
-      TokLEQ -> (lhs :<=: rhs, rest)
-      TokEQ -> (lhs :=: rhs, rest)
-      TokGEQ -> (lhs :>=: rhs, rest)
-      TokGT -> (lhs :>: rhs, rest)
-      TokNEQ -> (lhs :<>: rhs, rest)
+      TokLT -> ((lhs :<: rhs), rest)
+      TokLEQ -> ((lhs :<=: rhs), rest)
+      TokEQ -> ((lhs :=: rhs), rest)
+      TokGEQ -> ((lhs :>=: rhs), rest)
+      TokGT -> ((lhs :>: rhs), rest)
+      TokNEQ -> ((lhs :<>: rhs), rest)
       _ -> error ("Syntax error: " ++ show tok)
 
 --------------------------------------------------------------------------
 -- Boolean expression                                                   --
 --------------------------------------------------------------------------
 
-data BoolExpression = BoolExpression :&: BoolExpression
-                    | BoolExpression :|: BoolExpression
-                    | BoolExpression :->: BoolExpression
-                    | BoolExpression :<-: BoolExpression
-                    | BoolExpression :==: BoolExpression
+data BoolExpression = And BoolExpression BoolExpression
+                    | Or BoolExpression BoolExpression
+                    | Implies BoolExpression BoolExpression
+                    | Follows BoolExpression BoolExpression
+                    | Equiv BoolExpression BoolExpression
                     | Not BoolExpression
                     | BoolConst Bool
                     | Compare Relation
 
 instance Show BoolExpression where
-  show (lhs :&: rhs) = "(" ++ show lhs ++ " & " ++ show rhs ++ ")"
-  show (lhs :|: rhs) = "(" ++ show lhs ++ " | " ++ show rhs ++ ")"
-  show (lhs :->: rhs) = "(" ++ show lhs ++ " -> " ++ show rhs ++ ")"
-  show (lhs :<-: rhs) = "(" ++ show lhs ++ " <- " ++ show rhs ++ ")"
-  show (lhs :==: rhs) = "(" ++ show lhs ++ " == " ++ show rhs ++ ")"
+  show (And lhs rhs) = "(" ++ show lhs ++ " & " ++ show rhs ++ ")"
+  show (Or lhs rhs) = "(" ++ show lhs ++ " | " ++ show rhs ++ ")"
+  show (Implies lhs rhs) = "(" ++ show lhs ++ " -> " ++ show rhs ++ ")"
+  show (Follows lhs rhs) = "(" ++ show lhs ++ " <- " ++ show rhs ++ ")"
+  show (Equiv lhs rhs) = "(" ++ show lhs ++ " == " ++ show rhs ++ ")"
   show (Not e) = "~(" ++ show e ++ ")"
   show (BoolConst val) = show val
   show (Compare rel) = show rel
@@ -397,9 +294,9 @@ parseI' lhs (tok : tokens) =
   let (rhs, rest) = parseB tokens
   in
     case tok of
-      TokImplies -> parseI' (lhs :->: rhs) rest
-      TokFollows -> parseI' (lhs :<-: rhs) rest
-      TokEquiv -> parseI' (lhs :==: rhs) rest
+      TokImplies -> parseI' (Implies lhs rhs) rest
+      TokFollows -> parseI' (Follows lhs rhs) rest
+      TokEquiv -> parseI' (Equiv lhs rhs) rest
       _ -> (lhs, (tok : tokens))
 
 -- B -> C {B'}
@@ -413,7 +310,7 @@ parseB tokens =
 parseB' :: BoolExpression -> [Token] -> (BoolExpression, [Token])
 parseB' lhs (TokOr : tokens) =
   let (rhs, rest) = parseC tokens
-  in parseB' (lhs :|: rhs) rest
+  in parseB' (Or lhs rhs) rest
 parseB' lhs tokens = (lhs, tokens)
 
 -- C -> U {C'}
@@ -428,7 +325,7 @@ parseC tokens =
 parseC' :: BoolExpression -> [Token] -> (BoolExpression, [Token])
 parseC' lhs (TokAnd : tokens) =
   let (rhs, rest) = parseU tokens
-  in parseC' (lhs :&: rhs) rest
+  in (parseC' (And lhs rhs) rest)
 parseC' lhs tokens = (lhs, tokens)
 
 -- U -> "True"
@@ -455,25 +352,22 @@ parseU (tok : tokens) =
       in (Compare lhs, rest)
 
 --------------------------------------------------------------------------
--- Conjunctive Normal From                                              --
+-- Conjunctive Normal From
 --------------------------------------------------------------------------
 
 eliminateEquiv :: BoolExpression -> BoolExpression
-eliminateEquiv (lhs :==: rhs) =
-  let (l, r) = (eliminateEquiv lhs, eliminateEquiv rhs)
-  in (l :->: r) :&: (r :->: l)
-eliminateEquiv (lhs :|: rhs) = (eliminateEquiv lhs) :|: (eliminateEquiv rhs)
-eliminateEquiv (lhs :&: rhs) = (eliminateEquiv lhs) :&: (eliminateEquiv rhs)
-eliminateEquiv (lhs :->: rhs) = (eliminateEquiv lhs) :->: (eliminateEquiv rhs)
-eliminateEquiv (lhs :<-: rhs) = (eliminateEquiv lhs) :<-: (eliminateEquiv rhs)
+eliminateEquiv (Equiv lhs rhs) = And (Implies l r) (Implies r l)
+  where (l,r)=(eliminateEquiv lhs, eliminateEquiv rhs)
+eliminateEquiv (Follows lhs rhs) = Follows (eliminateEquiv lhs) (eliminateEquiv rhs)
 eliminateEquiv (Not e) = Not (eliminateEquiv e)
 eliminateEquiv e = e
 
 eliminateImplication :: BoolExpression -> BoolExpression
-eliminateImplication (lhs :->: rhs) =
-  let (l, r) = (eliminateImplication lhs, eliminateImplication rhs)
-  in (Not l) :|: r
-eliminateImplication (lhs :<-: rhs) = eliminateImplication (rhs :->: lhs)
+eliminateImplication (Implies lhs rhs) = Or (Not l) r
+  where (l,r)=(eliminateImplication lhs, eliminateImplication rhs)
+eliminateImplication (Follows lhs rhs) = eliminateImplication (Implies rhs lhs)
+eliminateImplication (And lhs rhs) = And (eliminateImplication lhs) (eliminateImplication rhs)
+eliminateImplication (Or lhs rhs) = Or (eliminateImplication lhs) (eliminateImplication rhs)
 eliminateImplication (Not e) = Not (eliminateImplication e)
 eliminateImplication e = e
 
@@ -483,25 +377,43 @@ pushAndEliminateNot e = pushNot 0 e
     pushNot 1 (BoolConst e)  = BoolConst (not e)
     pushNot 1 (Compare r) = Not (Compare r)
     pushNot 1 (Not e) = pushNot 0 e
-    pushNot 1 (lhs :&: rhs) = pushNot 1 lhs :|: pushNot 1 rhs
-    pushNot 1 (lhs :|: rhs) = pushNot 1 lhs :&: pushNot 1 rhs
-    pushNot 0 (lhs :|: rhs) = pushNot 0 lhs :|: pushNot 0 rhs
-    pushNot 0 (lhs :&: rhs) = pushNot 0 lhs :&: pushNot 0 rhs
+    pushNot 1 (And lhs rhs) = Or (pushNot 1 lhs) (pushNot 1 rhs)
+    pushNot 1 (Or lhs rhs) = And (pushNot 1 lhs) (pushNot 1 rhs)
+    pushNot 0 (Or lhs rhs) = Or (pushNot 0 lhs) (pushNot 0 rhs)
+    pushNot 0 (And lhs rhs) = And (pushNot 0 lhs) (pushNot 0 rhs)
     pushNot 0 (Not e) = pushNot 1 e
     pushNot 0 e = e
 
+{- this does not work yet
 distributeOrOverAnd :: BoolExpression -> BoolExpression
-distributeOrOverAnd ((l :&: r) :|: rhs) = (l :|: rhs) :&: (r :|: rhs)
-distributeOrOverAnd (lhs :|: (l :&: r)) = (lhs :|: l) :&: (lhs :|: r)
-distributeOrOverAnd (lhs :&: rhs) = distributeOrOverAnd lhs :&: distributeOrOverAnd rhs
+distributeOrOverAnd (Or (And l r) rhs) = And (Or l rhs) (Or r rhs)
+distributeOrOverAnd (Or lhs (And l r)) = And (Or lhs l) (Or lhs r)
+distributeOrOverAnd (And lhs rhs) = And (distributeOrOverAnd lhs) (distributeOrOverAnd rhs)
 distributeOrOverAnd e = e
+-}
+
+distributeOrOverAnd :: BoolExpression -> BoolExpression
+distributeOrOverAnd exp = if done then e else (distributeOrOverAnd e)
+  where (done,e)=distribute exp
+        distribute :: BoolExpression -> (Bool, BoolExpression)
+        distribute (Or (And l r) rhs) = (False, And (Or l rhs) (Or r rhs))
+        distribute (Or lhs (And l r)) = (False, And (Or lhs l) (Or lhs r))
+        distribute (Or lhs rhs) = let ((bl,l),(br,r))=(distribute lhs,distribute rhs) in (bl&&br,Or l r)
+        distribute (And lhs rhs) = let ((bl,l),(br,r))=(distribute lhs,distribute rhs) in (bl&&br,And l r)
+        distribute e = (True, e)
 
 cnf :: BoolExpression -> BoolExpression
-cnf = distributeOrOverAnd.pushAndEliminateNot.eliminateImplication.eliminateEquiv
+cnf  = distributeOrOverAnd.pushAndEliminateNot.eliminateImplication.eliminateEquiv
 
 cnfstr :: String -> BoolExpression
 cnfstr s = cnf $ parseBoolExpression s
 
+clauses :: BoolExpression -> [[BoolExpression]]
+clauses (And lhs rhs) = clauses lhs ++ clauses rhs
+clauses e = [clause e]
+  where clause :: BoolExpression -> [BoolExpression]
+        clause (Or lhs rhs) = clause lhs ++ clause rhs
+        clause e = [e]
 --------------------------------------------------------------------------
 -- Assignment                                                           --
 --------------------------------------------------------------------------
@@ -513,14 +425,14 @@ instance Show Assignment where
 
 acceptSemicolon :: [Token] -> [Token]
 acceptSemicolon (TokSemiColon:xs) = xs
-acceptSemicolon (TokEnd:xs) = TokEnd:xs
+acceptSemicolon (TokEnd:xs) = (TokEnd:xs)
 acceptSemicolon _ = error "Error: expected semicolon"
 
 parseAssignments :: String -> [Assignment]
 parseAssignments str = parseAs (lexer str)
   where parseAs [TokEnd] = []
         parseAs tokens = ass:parseAs (acceptSemicolon toks)
-          where (ass, toks) = parseA tokens
+          where   (ass, toks) = parseA tokens
 
 parseAssignment :: String -> Assignment
 parseAssignment str =
@@ -533,7 +445,7 @@ parseAssignment str =
 parseA :: [Token] -> (Assignment, [Token])
 parseA (TokVariable var : TokAssign : tokens) =
   let (exp, rest) = parseE tokens
-  in (Assign var exp, rest)
+  in ((Assign var exp), rest)
 parseA (tok : _) = error ("Syntax error: " ++ show tok)
 
 --------------------------------------------------------------------------
@@ -541,32 +453,33 @@ parseA (tok : _) = error ("Syntax error: " ++ show tok)
 --------------------------------------------------------------------------
 
 wpArithExp :: Assignment -> ArithExpression -> ArithExpression
-wpArithExp ass (lhs :+: rhs) = wpArithExp ass lhs :+: wpArithExp ass rhs
-wpArithExp ass (lhs :-: rhs) = wpArithExp ass lhs :-: wpArithExp ass rhs
-wpArithExp ass (lhs :*: rhs) = wpArithExp ass lhs :*: wpArithExp ass rhs
-wpArithExp ass (lhs :/: rhs) = wpArithExp ass lhs :/: wpArithExp ass rhs
-wpArithExp ass (lhs :%: rhs) = wpArithExp ass lhs :%: wpArithExp ass rhs
+wpArithExp ass (Plus lhs rhs) = Plus (wpArithExp ass lhs) (wpArithExp ass rhs)
+wpArithExp ass (Minus lhs rhs) = Minus (wpArithExp ass lhs) (wpArithExp ass rhs)
+wpArithExp ass (Times lhs rhs) = Times (wpArithExp ass lhs) (wpArithExp ass rhs)
+wpArithExp ass (Div lhs rhs) = Div (wpArithExp ass lhs) (wpArithExp ass rhs)
+wpArithExp ass (Mod lhs rhs) = Mod (wpArithExp ass lhs) (wpArithExp ass rhs)
+wpArithExp ass (Exp lhs rhs) = Exp (wpArithExp ass lhs) (wpArithExp ass rhs)
 wpArithExp ass (UnaryMinus exp) = UnaryMinus (wpArithExp ass exp)
 wpArithExp (Assign var e) (Variable str) =
   if str == var
   then e
-  else Variable str
+  else (Variable str)
 wpArithExp ass exp = exp
 
 wpRel :: Assignment -> Relation -> Relation
-wpRel ass (lhs :<: rhs) = wpArithExp ass lhs :<: wpArithExp ass rhs
-wpRel ass (lhs :<=: rhs) = wpArithExp ass lhs :<=: wpArithExp ass rhs
-wpRel ass (lhs :=: rhs) = wpArithExp ass lhs :=: wpArithExp ass rhs
-wpRel ass (lhs :>=: rhs) = wpArithExp ass lhs :>=: wpArithExp ass rhs
-wpRel ass (lhs :>: rhs) = wpArithExp ass lhs :>: wpArithExp ass rhs
-wpRel ass (lhs :<>: rhs) = wpArithExp ass lhs :<>: wpArithExp ass rhs
+wpRel ass (lhs :<: rhs) = (wpArithExp ass lhs) :<: (wpArithExp ass rhs)
+wpRel ass (lhs :<=: rhs) = (wpArithExp ass lhs) :<=: (wpArithExp ass rhs)
+wpRel ass (lhs :=: rhs) = (wpArithExp ass lhs) :=: (wpArithExp ass rhs)
+wpRel ass (lhs :>=: rhs) = (wpArithExp ass lhs) :>=: (wpArithExp ass rhs)
+wpRel ass (lhs :>: rhs) = (wpArithExp ass lhs) :>: (wpArithExp ass rhs)
+wpRel ass (lhs :<>: rhs) = (wpArithExp ass lhs) :<>: (wpArithExp ass rhs)
 
 wp0 :: Assignment -> BoolExpression -> BoolExpression
-wp0 ass (lhs :&: rhs) = wp0 ass lhs :&: wp0 ass rhs
-wp0 ass (lhs :|: rhs) = wp0 ass lhs :|: wp0 ass rhs
-wp0 ass (lhs :->: rhs) = wp0 ass lhs :->: wp0 ass rhs
-wp0 ass (lhs :<-: rhs) = wp0 ass lhs :<-: wp0 ass rhs
-wp0 ass (lhs :==: rhs) = wp0 ass lhs :==: wp0 ass rhs
+wp0 ass (And lhs rhs) = And (wp0 ass lhs) (wp0 ass rhs)
+wp0 ass (Or lhs rhs) = Or (wp0 ass lhs) (wp0 ass rhs)
+wp0 ass (Implies lhs rhs) = Implies (wp0 ass lhs) (wp0 ass rhs)
+wp0 ass (Follows lhs rhs) = Follows (wp0 ass lhs) (wp0 ass rhs)
+wp0 ass (Equiv lhs rhs) = Equiv (wp0 ass lhs) (wp0 ass rhs)
 wp0 ass (Not exp) = Not (wp0 ass exp)
 wp0 ass (Compare rel) = Compare (wpRel ass rel)
 
@@ -581,168 +494,20 @@ wp assStr expStr =
   in wps ass exp
 
 --------------------------------------------------------------------------
--- Simplification                                                       --
+-- Simplify                                                             --
 --------------------------------------------------------------------------
 
 pushMinus :: ArithExpression -> ArithExpression
-pushMinus (lhs :+: rhs) = pushMinus lhs :+: pushMinus rhs
-pushMinus (lhs :-: rhs) = pushMinus lhs :+: pushMinus rhs
-pushMinus (lhs :*: rhs) = pushMinus lhs :*: rhs
-pushMinus (lhs :/: rhs) = pushMinus lhs :/: rhs
-pushMinus (lhs :%: rhs) = pushMinus lhs :%: rhs
+pushMinus (Plus lhs rhs) = Plus (pushMinus lhs) (pushMinus rhs)
+pushMinus (Minus lhs rhs) = Plus (pushMinus lhs) (pushMinus rhs)
+pushMinus (Times lhs rhs) = Times (pushMinus lhs) rhs
+pushMinus (Div lhs rhs) = Div (pushMinus lhs) rhs
+pushMinus (Mod lhs rhs) = Mod (pushMinus lhs) rhs
+pushMinus (Exp lhs rhs) = Exp (pushMinus lhs) rhs
 pushMinus (UnaryMinus exp) = exp
 pushMinus (IntValue n) = UnaryMinus (IntValue n)
 pushMinus (Variable str) = UnaryMinus (Variable str)
 pushMinus (Constant str) = UnaryMinus (Constant str)
-
-eliminateMinus :: ArithExpression -> ArithExpression
-eliminateMinus (lhs :-: rhs) =
-  let (lhs', rhs') = (eliminateMinus lhs, pushMinus (eliminateMinus rhs))
-  in lhs' :+: rhs'
-eliminateMinus (lhs :+: rhs) = eliminateMinus lhs :+: eliminateMinus rhs
-eliminateMinus (lhs :*: rhs) = eliminateMinus lhs :*: eliminateMinus rhs
-eliminateMinus (lhs :/: rhs) = eliminateMinus lhs :/: eliminateMinus rhs
-eliminateMinus (lhs :%: rhs) = eliminateMinus lhs :%: eliminateMinus rhs
-eliminateMinus (UnaryMinus exp) = pushMinus (eliminateMinus exp)
-eliminateMinus exp = exp
-
-reorderRelation :: Relation -> Relation
-reorderRelation (lhs :<: rhs) = (lhs :-: rhs) :<: IntValue 0
-reorderRelation (lhs :<=: rhs) = (lhs :-: rhs) :<=: IntValue 0
-reorderRelation (lhs :=: rhs) = (lhs :-: rhs) :=: IntValue 0
-reorderRelation (lhs :>: rhs) = reorderRelation (rhs :<: lhs)
-reorderRelation (lhs :>=: rhs) = reorderRelation (rhs :<=: lhs)
-
--- SIMPLIFICATION ON ARITHEXPRLISTS
-simplify :: ArithExprList -> ArithExprList
-simplify (Add es) = simplifyAdd es
-simplify (Mul es) = simplifyMul es
-simplify e = simplify' e
-
-simplify' :: ArithExprList -> ArithExprList
-simplify' (Add (first:[])) = first
-simplify' (Mul (first:[])) = first
-simplify' (Div (first:[])) = first
-simplify' e = e
-
-simplifyAdd :: [ArithExprList] -> ArithExprList
-simplifyAdd es =
-  let (e:es') = simplifyAdd' es 0
-  in
-    case es' of
-      [] -> simplify e
-      _ -> Add (simplifyAdd' (e:es') 0)
-
-simplifyAdd' :: [ArithExprList] -> Integer -> [ArithExprList]
-simplifyAdd' [] 0 = []
-simplifyAdd' [] total = [Val total]
-simplifyAdd' (e:es) total =
-  case e of
-    Val n -> simplifyAdd' es (n+total)
-    --Mul es' -> error $ show (simplifyMul' es' 1) --simplifyAdd' ((simplifyMul' es' 1) ++ es) total --simplifyAdd' (es ++ (simplifyMul' es' 1)) total
-    _ -> simplify e : simplifyAdd' es total
-
---combineTerms :: [ArithExprList] -> String -> [ArithExprList]
---combineTerms [] var = []
---combineTerms (e:es) var = combineTerms' e var 1 ++ combineTerms es var
---
---combineTerms' :: [ArithExprList] -> String -> Integer -> [ArithExprList]
---combineTerms' [] var 1 = [Var var]
---combineTerms' [] var coefficient = [Mul [coefficient, var]]
---combineTerms' es var coefficient = es
-
-simplifyMul :: [ArithExprList] -> ArithExprList
-simplifyMul es =
-  let (e:es') = simplifyMul' es 1
-  in
-    case es' of
-      [] -> simplify e
-      _ -> Mul (simplifyMul' (e:es') 1)
-
-simplifyMul' :: [ArithExprList] -> Integer -> [ArithExprList]
-simplifyMul' [] coefficient = [Val coefficient]
-simplifyMul' (e:es) coefficient =
-  case e of
-    Val n -> simplifyMul' es (n*coefficient)
-    _ -> simplify e : simplifyMul' es coefficient
-
---------------------------------------------------------------------------
--- Evaluation                                                           --
---------------------------------------------------------------------------
-
-type Valuation = (String, Integer)
-
-getValue :: String -> [Valuation] -> Maybe Integer
-getValue str [] = Nothing
-getValue str ((s, v):vals) = if str == s then Just v else getValue str vals
-
-setValue :: String -> Integer -> [Valuation] -> [Valuation]
-setValue str n [] = [(str, n)]
-setValue str n ((s, v):vals) = if str == s then (s, n):vals else (s, v):setValue str n vals
-
-popValue :: String -> [Valuation] -> [Valuation]
-popValue str [] = []
-popValue str ((s, v):vals) = if str == s then vals else (s, v):popValue str vals
-
-sumValuations :: [Valuation] -> [Valuation] -> [Valuation]
-sumValuations [] bs = bs
-sumValuations (v:as) bs = sumValuations as (sumValuations' v bs)
-
-sumValuations' :: Valuation -> [Valuation] -> [Valuation]
-sumValuations' (str, n) [] = [(str, n)]
-sumValuations' (str, n) ((s, v):vals) =
-  if str == s
-    then (s, n+v):vals
-    else sumValuations' (str, n) vals
-
-evalArithExp :: ArithExpression -> [Valuation] -> Integer
-evalArithExp (IntValue n) _ = n
-evalArithExp (Variable str) vals =
-  case getValue str vals of
-    Just v -> v
-    Nothing -> error ("Undefined variable: " ++ str)
-evalArithExp (Constant str) vals =
-  case getValue str vals of
-    Just v -> v
-    Nothing -> error ("Undefined constant: " ++ str)
-evalArithExp (UnaryMinus exp) vals = -(evalArithExp exp vals)
-evalArithExp (lhs :+: rhs) vals = evalArithExp lhs vals + evalArithExp rhs vals
-evalArithExp (lhs :-: rhs) vals = evalArithExp lhs vals - evalArithExp rhs vals
-evalArithExp (lhs :*: rhs) vals = evalArithExp lhs vals * evalArithExp rhs vals
-evalArithExp (lhs :/: rhs) vals = evalArithExp lhs vals `div` evalArithExp rhs vals
-evalArithExp (lhs :%: rhs) vals = evalArithExp lhs vals `mod` evalArithExp rhs vals
-
-evalRelation :: Relation -> [Valuation] -> Bool
-evalRelation (lhs :<: rhs) vals = evalArithExp lhs vals < evalArithExp rhs vals
-evalRelation (lhs :=: rhs) vals = evalArithExp lhs vals == evalArithExp rhs vals
-evalRelation (lhs :<=: rhs) vals = evalArithExp lhs vals <= evalArithExp rhs vals
-evalRelation (lhs :>=: rhs) vals = evalRelation (rhs :<=: lhs) vals
-evalRelation (lhs :>: rhs) vals = evalRelation (rhs :<: lhs) vals
-evalRelation (lhs :<>: rhs) vals = not (evalRelation (rhs :=: lhs) vals)
-
-evalBoolExpression :: BoolExpression -> [Valuation] -> Bool
-evalBoolExpression (lhs :&: rhs) vals = evalBoolExpression lhs vals && evalBoolExpression rhs vals
-evalBoolExpression (lhs :|: rhs) vals = evalBoolExpression lhs vals || evalBoolExpression rhs vals
-evalBoolExpression (lhs :->: rhs) vals = not (evalBoolExpression lhs vals) || evalBoolExpression rhs vals
-evalBoolExpression (lhs :<-: rhs) vals = not (evalBoolExpression rhs vals) || evalBoolExpression lhs vals
-evalBoolExpression (lhs :==: rhs) vals = evalBoolExpression lhs vals == evalBoolExpression rhs vals
-evalBoolExpression (Not exp) vals = not (evalBoolExpression exp vals)
-evalBoolExpression (Compare rel) vals = evalRelation rel vals
-evalBoolExpression (BoolConst c) vals = c
-
---------------------------------------------------------------------------
--- Testing                                                              --
---------------------------------------------------------------------------
-
-simulateStep :: Assignment -> [Valuation] -> [Valuation]
-simulateStep (Assign var exp) vals = setValue var (evalArithExp exp vals) vals
-
-simulate :: [Assignment] -> [Valuation] -> [Valuation]
-simulate [] vals = vals
-simulate (a:as) vals = simulate as (simulateStep a vals)
-
-runSimulation :: [Assignment] -> [Valuation] -> [Valuation]
-runSimulation assignments vals = simulate assignments vals
 
 randomList :: Integer -> Integer -> [Integer]
 randomList lwb upb = map (\x -> x `mod` (upb+1-lwb) + lwb) rl
@@ -755,60 +520,208 @@ splitInfiniteList n xs = take n xs:splitInfiniteList n (drop n xs)
 randomSets :: Int -> Int -> Integer -> Integer -> [[Integer]]
 randomSets n len lwb upb = take n (splitInfiniteList len (randomList lwb upb))
 
-listExpIdentifiers :: ArithExpression -> [String]
-listExpIdentifiers exp = nub (listExpIdentifiers' exp [])
+type Valuation = (String, Integer)
 
-listExpIdentifiers' :: ArithExpression -> [String] -> [String]
-listExpIdentifiers' (lhs :+: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
-listExpIdentifiers' (lhs :-: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
-listExpIdentifiers' (lhs :*: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
-listExpIdentifiers' (lhs :/: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
-listExpIdentifiers' (lhs :%: rhs) ids = listExpIdentifiers' lhs ids ++ listExpIdentifiers' rhs ids
-listExpIdentifiers' (UnaryMinus exp) ids = listExpIdentifiers' exp ids
-listExpIdentifiers' (Variable var) ids = (var : ids)
-listExpIdentifiers' (Constant const) ids = (const : ids)
-listExpIdentifiers' _ ids = ids
+getValue :: String -> [Valuation] -> Maybe Integer
+getValue str [] = Nothing
+getValue str ((s,v):vals) = if str == s then Just v else getValue str vals
 
-listRelIdentifiers :: Relation -> [String]
-listRelIdentifiers (lhs :<: rhs) = nub (listExpIdentifiers lhs ++ listExpIdentifiers rhs)
-listRelIdentifiers (lhs :<=: rhs) = nub (listExpIdentifiers lhs ++ listExpIdentifiers rhs)
-listRelIdentifiers (lhs :=: rhs) = nub (listExpIdentifiers lhs ++ listExpIdentifiers rhs)
-listRelIdentifiers (lhs :>=: rhs) = nub (listExpIdentifiers lhs ++ listExpIdentifiers rhs)
-listRelIdentifiers (lhs :>: rhs) = nub (listExpIdentifiers lhs ++ listExpIdentifiers rhs)
-listRelIdentifiers (lhs :<>: rhs) = nub (listExpIdentifiers lhs ++ listExpIdentifiers rhs)
+setValue :: String -> Integer -> [Valuation] -> [Valuation]
+setValue str n [] = [(str,n)]
+setValue str n ((s,o):vals) = if str == s then ((s,n):vals) else ((s,o):(setValue str n vals))
 
-listBoolExpIdentifiers :: BoolExpression -> [String]
-listBoolExpIdentifiers (lhs :&: rhs) = nub (listBoolExpIdentifiers lhs ++ listBoolExpIdentifiers rhs)
-listBoolExpIdentifiers (lhs :|: rhs) = nub (listBoolExpIdentifiers lhs ++ listBoolExpIdentifiers rhs)
-listBoolExpIdentifiers (lhs :->: rhs) = nub (listBoolExpIdentifiers lhs ++ listBoolExpIdentifiers rhs)
-listBoolExpIdentifiers (lhs :<-: rhs) = nub (listBoolExpIdentifiers lhs ++ listBoolExpIdentifiers rhs)
-listBoolExpIdentifiers (lhs :==: rhs) = nub (listBoolExpIdentifiers lhs ++ listBoolExpIdentifiers rhs)
-listBoolExpIdentifiers (Not exp) = listBoolExpIdentifiers exp
-listBoolExpIdentifiers (Compare rel) = listRelIdentifiers rel
-listBoolExpIdentifiers _ = []
+popValue :: String -> [Valuation] -> [Valuation]
+popValue str [] = []
+popValue str ((s,o):vals) = if str == s then vals else ((s,o):popValue str vals)
 
-randomValuations :: [String] -> Int -> Integer -> Integer -> [[Valuation]]
-randomValuations ids len lwb upb = randomValuations' (replicate len ids) (randomSets len (length ids) lwb upb)
+sumValuations :: [Valuation] -> [Valuation] -> [Valuation]
+sumValuations [] bs = bs
+sumValuations (v:as) bs = sumValuations as (sumValuations' v bs)
 
-randomValuations' :: [[String]] -> [[Integer]] -> [[Valuation]]
-randomValuations' [] [] = []
-randomValuations' (ids:idsList) (values:valuesList) = [zip ids values] ++ (randomValuations' idsList valuesList)
-randomValuations' _ _ = error "Identifier and value lists must be same length"
+sumValuations' :: Valuation -> [Valuation] -> [Valuation]
+sumValuations' (str,n) [] = [(str,n)]
+sumValuations' (str,n) ((s,o):vals) =
+  if str == s
+    then ((s, n+o):vals)
+    else sumValuations' (str,n) vals
 
-findCounterExample :: String -> String -> String -> Int -> Integer -> Integer -> Maybe [Valuation]
-findCounterExample preStr assStr postStr len lwb upb =
-  let pre = parseBoolExpression preStr
-      assignments = parseAssignments assStr
-      post = parseBoolExpression postStr
-      ids = nub (listBoolExpIdentifiers pre ++ listBoolExpIdentifiers post)
-      values = randomValuations ids len lwb upb
-  in findCounterExample' pre assignments post values
+evalAExpression :: ArithExpression -> [Valuation] -> Integer
+evalAExpression (IntValue n) _ = n
+evalAExpression (Variable str) vals =
+  case getValue str vals of
+    Just v -> v
+    Nothing -> error ("Undefined variable: " ++ str)
+evalAExpression (Constant str) vals =
+  case getValue str vals of
+    Just v -> v
+    Nothing -> error ("Undefined constant: " ++ str)
+evalAExpression (UnaryMinus exp) vals = -(evalAExpression exp vals)
+evalAExpression (Plus lhs rhs) vals = (evalAExpression lhs vals) + (evalAExpression rhs vals)
+evalAExpression (Minus lhs rhs) vals = (evalAExpression lhs vals) - (evalAExpression rhs vals)
+evalAExpression (Times lhs rhs) vals = (evalAExpression lhs vals) * (evalAExpression rhs vals)
+evalAExpression (Div lhs rhs) vals = div (evalAExpression lhs vals) (evalAExpression rhs vals)
+evalAExpression (Mod lhs rhs) vals = mod (evalAExpression lhs vals) (evalAExpression rhs vals)
+evalAExpression (Exp lhs rhs) vals = (evalAExpression lhs vals) ^ (evalAExpression rhs vals)
 
-findCounterExample' :: BoolExpression -> [Assignment] -> BoolExpression -> [[Valuation]] -> Maybe [Valuation]
-findCounterExample' pre ass post [] = Nothing
-findCounterExample' pre ass post (val:vals) =
-  if evalBoolExpression pre val
-    then if not (evalBoolExpression post (runSimulation ass val))
-      then Just val
-      else findCounterExample' pre ass post vals
-    else findCounterExample' pre ass post vals
+simulateStep :: Assignment -> [Valuation] -> [Valuation]
+simulateStep (Assign var exp) vals = setValue var (evalAExpression exp vals) vals
+
+simulate :: [Assignment] -> [Valuation] -> [Valuation]
+simulate [] vals = vals
+simulate (a:as) vals = simulate as (simulateStep a vals)
+
+runSimulation :: String -> [Valuation] -> [Valuation]
+runSimulation s vals = simulate (parseAssignments s) vals
+
+evalRelation :: Relation -> [Valuation] -> Bool
+evalRelation (lhs :<: rhs) vals = evalAExpression lhs vals < evalAExpression rhs vals
+evalRelation (lhs :=: rhs) vals = evalAExpression lhs vals == evalAExpression rhs vals
+evalRelation (lhs :<=: rhs) vals = evalAExpression lhs vals <= evalAExpression rhs vals
+evalRelation (lhs :>=: rhs) vals = evalRelation (rhs :<=: lhs) vals
+evalRelation (lhs :>: rhs) vals = evalRelation (rhs :<: lhs) vals
+evalRelation (lhs :<>: rhs) vals = not (evalRelation (rhs :=: lhs) vals)
+
+evalBoolExpression :: BoolExpression -> [Valuation] -> Bool
+evalBoolExpression (And lhs rhs) vals = (evalBoolExpression lhs vals) && (evalBoolExpression rhs vals)
+evalBoolExpression (Or lhs rhs) vals = (evalBoolExpression lhs vals) || (evalBoolExpression rhs vals)
+evalBoolExpression (Not exp) vals = not (evalBoolExpression exp vals)
+evalBoolExpression (Compare rel) vals = evalRelation rel vals
+
+testHoareTriple :: [Valuation] -> String -> String -> Bool
+testHoareTriple vals assStr expStr =
+  evalBoolExpression (parseBoolExpression expStr) (runSimulation assStr vals)
+
+eliminateMinus :: ArithExpression -> ArithExpression
+eliminateMinus (Minus lhs rhs) =
+  let (lhs', rhs') = (eliminateMinus lhs, pushMinus (eliminateMinus rhs))
+  in Plus lhs' rhs'
+eliminateMinus (Plus lhs rhs) = Plus (eliminateMinus lhs) (eliminateMinus rhs)
+eliminateMinus (Times lhs rhs) = Times (eliminateMinus lhs) (eliminateMinus rhs)
+eliminateMinus (Div lhs rhs) = Div (eliminateMinus lhs) (eliminateMinus rhs)
+eliminateMinus (Mod lhs rhs) = Mod (eliminateMinus lhs) (eliminateMinus rhs)
+eliminateMinus (Exp lhs rhs) = Exp (eliminateMinus lhs) (eliminateMinus rhs)
+eliminateMinus (UnaryMinus exp) = pushMinus (eliminateMinus exp)
+eliminateMinus exp = exp
+
+--------------------------------------------------------------------------
+-- Unify                                                                --
+--------------------------------------------------------------------------
+
+type Unifier =  [(String, ArithExpression)]
+
+occurCheck :: String -> ArithExpression -> Bool
+occurCheck var (BoundVariable e) = (var==e)
+occurCheck var (UnaryMinus e) = occurCheck var e
+occurCheck var (Plus  l r) = occurCheck var l || occurCheck var r
+occurCheck var (Minus l r) = occurCheck var l || occurCheck var r
+occurCheck var (Times l r) = occurCheck var l || occurCheck var r
+occurCheck var (Div  l r)  = occurCheck var l || occurCheck var r
+occurCheck var (Mod  l r)  = occurCheck var l || occurCheck var r
+occurCheck var (Exp  l r)  = occurCheck var l || occurCheck var r
+occurCheck var e = False
+
+findUnification :: String -> Unifier -> Bool
+findUnification _ [] = False
+findUnification var ((x,e):us) = (var==x) || findUnification var us
+
+getUnification :: String -> Unifier -> ArithExpression
+getUnification var [] = (BoundVariable var)
+getUnification var ((x,e):us) = if var==x then e else getUnification var us
+
+isBoundVar :: ArithExpression -> Bool
+isBoundVar (BoundVariable s) = True
+isBoundVar e = False
+
+getBoundVarName :: ArithExpression -> String
+getBoundVarName (BoundVariable s) = s
+
+unifyVar :: String -> ArithExpression -> Maybe Unifier -> Maybe Unifier
+unifyVar var x (Just theta) =
+  if findUnification var theta
+  then mguAexp (getUnification var theta) x (Just theta)
+  else if (isBoundVar x) && (findUnification (getBoundVarName x) theta)
+       then mguAexp (BoundVariable var) (getUnification (getBoundVarName x) theta) (Just theta)
+       else if occurCheck var x then Nothing else Just ((var,x):theta)
+       
+mguAexp :: ArithExpression -> ArithExpression -> Maybe Unifier -> Maybe Unifier
+mguAexp e0 e1 Nothing = Nothing
+mguAexp (BoundVariable x) (BoundVariable y) theta =
+  if (x == y) then theta else unifyVar x (BoundVariable y) theta
+mguAexp (BoundVariable x) y theta = unifyVar x y theta
+mguAexp x (BoundVariable y) theta = unifyVar y x theta
+mguAexp (Constant x) (Constant y) theta = if x == y then theta else Nothing
+mguAexp (IntValue x) (IntValue y) theta = if x == y then theta else Nothing
+mguAexp (Variable x) (Variable y) theta = if x == y then theta else Nothing
+mguAexp (UnaryMinus e0) (UnaryMinus e1) theta = mguAexp e0 e1 theta
+mguAexp (Plus  l0 r0) (Plus l1 r1) theta = mguAexp r0 r1 (mguAexp l0 l1 theta)
+mguAexp (Minus  l0 r0) (Minus l1 r1) theta = mguAexp r0 r1 (mguAexp l0 l1 theta)
+mguAexp (Times  l0 r0) (Times l1 r1) theta = mguAexp r0 r1 (mguAexp l0 l1 theta)
+mguAexp (Div  l0 r0) (Div l1 r1) theta = mguAexp r0 r1 (mguAexp l0 l1 theta)
+mguAexp (Mod  l0 r0) (Mod l1 r1) theta = mguAexp r0 r1 (mguAexp l0 l1 theta)
+mguAexp (Exp  l0 r0) (Exp l1 r1) theta = mguAexp r0 r1 (mguAexp l0 l1 theta)
+mguAexp e0 e1 theta = Nothing
+
+mguRel :: Relation -> Relation -> Maybe Unifier -> Maybe Unifier
+mguRel e0 e1 Nothing = Nothing
+mguRel (l0 :<: l1) (r0 :<: r1) theta   = mguAexp l1 r1 (mguAexp l0 r0 theta)
+mguRel (l0 :<=: l1) (r0 :<=: r1) theta = mguAexp l1 r1 (mguAexp l0 r0 theta)
+mguRel (l0 :=: l1) (r0 :=: r1) theta   = mguAexp l1 r1 (mguAexp l0 r0 theta)
+mguRel (l0 :>=: l1) (r0 :>=: r1) theta = mguAexp l1 r1 (mguAexp l0 r0 theta)
+mguRel (l0 :>: l1) (r0 :>: r1) theta   = mguAexp l1 r1 (mguAexp l0 r0 theta)
+mguRel (l0 :<>: l1) (r0 :<>: r1) theta = mguAexp l1 r1 (mguAexp l0 r0 theta)
+mguRel _ _ _ = Nothing
+
+mguBexp :: BoolExpression -> BoolExpression -> Maybe Unifier -> Maybe Unifier
+mguBexp e0 e1 Nothing = Nothing
+mguBexp (And l0 l1) (And r0 r1) theta   = mguBexp l1 r1 (mguBexp l0 r0 theta)
+mguBexp (Or l0 l1) (Or r0 r1) theta   = mguBexp l1 r1 (mguBexp l0 r0 theta)
+mguBexp (Implies l0 l1) (Implies r0 r1) theta   = mguBexp l1 r1 (mguBexp l0 r0 theta)
+mguBexp (Follows l0 l1) (Follows r0 r1) theta   = mguBexp l1 r1 (mguBexp l0 r0 theta)
+mguBexp (Equiv l0 l1) (Equiv r0 r1) theta   = mguBexp l1 r1 (mguBexp l0 r0 theta)
+mguBexp (Not e0) (Not e1) theta   = mguBexp e0 e1 theta
+mguBexp (BoolConst e0) (BoolConst e1) theta = if e0==e1 then theta else Nothing
+mguBexp (Compare e0) (Compare e1) theta   = mguRel e0 e1 theta
+mguBexp _ _ _ = Nothing
+
+hasBoundVariable :: ArithExpression -> Bool
+hasBoundVariable (BoundVariable e) = True
+hasBoundVariable (UnaryMinus e) = hasBoundVariable e
+hasBoundVariable (Plus  l r) = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable (Minus l r) = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable (Times l r) = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable (Div  l r)  = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable (Mod  l r)  = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable (Exp  l r)  = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable e = False
+
+mgu :: BoolExpression -> BoolExpression -> Maybe Unifier -> Maybe Unifier
+mgu = mguBexp
+
+sure :: Maybe a -> a
+sure (Just x) = x
+
+applyMGU :: Unifier -> ArithExpression -> ArithExpression 
+applyMGU theta (BoundVariable v) = let e = getUnification v theta in
+   if e /= (BoundVariable v) then applyMGU theta e else e
+applyMGU theta (UnaryMinus e) = UnaryMinus (applyMGU theta e)
+applyMGU theta (Plus  l r)  = Plus (applyMGU theta l) (applyMGU theta r)
+applyMGU theta (Minus  l r) = Minus (applyMGU theta l) (applyMGU theta r)
+applyMGU theta (Times  l r) = Times (applyMGU theta l) (applyMGU theta r)
+applyMGU theta (Div  l r) = Div (applyMGU theta l) (applyMGU theta r)
+applyMGU theta (Mod  l r) = Mod (applyMGU theta l) (applyMGU theta r)
+applyMGU theta e = e
+
+simplifyMGU :: Unifier -> Unifier
+simplifyMGU theta = map (\(v,e) -> (v,applyMGU theta e)) theta
+
+testAmgu :: String -> String -> Maybe Unifier
+testAmgu s0 s1 = mguAexp (parseArithExpression s0) (parseArithExpression s1) (Just [])
+
+testmgu :: String -> String -> Maybe Unifier
+testmgu s0 s1 = mgu (parseBoolExpression s0) (parseBoolExpression s1) (Just [])
+
+chain = sure $ testmgu  "#a+#b+#c+#d<#e"  "#b+#c+#d+#e<0"
+--circle= sure $ testmgu  "#a=#b"  "#b=#a"
+circle= sure $ testmgu  "#a-#b=0"  "#b-#a=0"
+
+--clauses
