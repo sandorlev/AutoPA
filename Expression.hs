@@ -428,12 +428,73 @@ cnf  = distributeOrOverAnd.pushAndEliminateNot.eliminateImplication.eliminateEqu
 cnfstr :: String -> BoolExpression
 cnfstr s = cnf $ parseBoolExpression s
 
-clauses :: BoolExpression -> [[BoolExpression]]
-clauses (lhs :&: rhs) = clauses lhs ++ clauses rhs
-clauses e = [clause e]
-  where clause :: BoolExpression -> [BoolExpression]
+type Clauses = [BoolExpression]
+
+clauses :: BoolExpression -> [Clauses]
+clauses e = clauses' $ cnf e
+
+clauses' :: BoolExpression -> [Clauses]
+clauses' (lhs :&: rhs) = clauses' lhs ++ clauses' rhs
+clauses' e = [clause e]
+  where clause :: BoolExpression -> Clauses
         clause (lhs :|: rhs) = clause lhs ++ clause rhs
         clause e = [e]
+
+clausesstr :: String -> [Clauses]
+clausesstr s = clauses $ parseBoolExpression s
+
+resolveClauses :: [Clauses] -> Bool
+resolveClauses [] = False
+resolveClauses (a:as) =
+  let resolvents = resolveClauses' a as
+  in
+    if [] `elem` resolvents
+    then True
+    else resolveClauses (as ++ resolvents)
+
+resolveClauses' :: Clauses -> [Clauses] -> [Clauses]
+resolveClauses' a [] = []
+resolveClauses' a (b:bs) =
+  let res = [a ++ b] ++ resolveClauses' a bs
+  in dropIdenticals (dropOpposites res)
+
+dropIdenticals :: [Clauses] -> [Clauses]
+dropIdenticals [] = []
+dropIdenticals (c:cs) = dropIdenticals' c : dropIdenticals cs
+
+dropIdenticals' :: Clauses -> Clauses
+dropIdenticals' [] = []
+dropIdenticals' (c:cs) =
+  let cs' = dropIdenticals'' c cs
+  in
+    if cs == cs'
+    then c : dropIdenticals' cs
+    else dropIdenticals' cs
+
+dropIdenticals'' :: BoolExpression -> Clauses -> Clauses
+dropIdenticals'' e [] = []
+dropIdenticals'' e (c:cs)
+  | e == c = dropIdenticals'' e cs
+  | otherwise = c : dropIdenticals'' e cs
+
+dropOpposites :: [Clauses] -> [Clauses]
+dropOpposites [] = []
+dropOpposites (c:cs) = dropOpposites' c : dropOpposites cs
+
+dropOpposites' :: Clauses -> Clauses
+dropOpposites' [] = []
+dropOpposites' (c:cs) =
+  let cs' = dropOpposites'' c cs
+  in
+    if cs == cs'
+    then c : dropOpposites' cs
+    else dropOpposites' cs'
+
+dropOpposites'' :: BoolExpression -> Clauses -> Clauses
+dropOpposites'' e [] = []
+dropOpposites'' e (c:cs)
+  | cnf (Not e) == c = dropOpposites'' e cs
+  | otherwise = c : dropOpposites'' e cs
 
 --------------------------------------------------------------------------
 -- Assignment                                                           --
