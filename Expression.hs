@@ -440,61 +440,104 @@ clauses' e = [clause e]
         clause (lhs :|: rhs) = clause lhs ++ clause rhs
         clause e = [e]
 
+dropFromClauses :: BoolExpression -> Clauses -> Clauses
+dropFromClauses _ [] = []
+dropFromClauses exp (c:cs)
+  | exp == c = cs
+  | otherwise = c : dropFromClauses exp cs
+
+eqClauses :: Clauses -> Clauses -> Bool
+eqClauses [] [] = True
+eqClauses (a:as) bs =
+  let bs' = dropFromClauses a bs
+  in
+    if bs == bs'
+    then False
+    else eqClauses as bs'
+eqClauses x y = False
+
+subsetOf :: [Clauses] -> [Clauses] -> Bool
+subsetOf [] _ = True
+subsetOf _ [] = False
+subsetOf (a:as) bs = subsetOf' a bs && subsetOf as bs
+  where subsetOf' :: Clauses -> [Clauses] -> Bool
+        subsetOf' [] _ = True
+        subsetOf' _ [] = False
+        subsetOf' a (c:cs) = eqClauses a c || subsetOf' a cs
+
 clausesstr :: String -> [Clauses]
 clausesstr s = clauses $ parseBoolExpression s
 
-resolveClauses :: [Clauses] -> Bool
-resolveClauses [] = False
-resolveClauses (a:as) =
-  let resolvents = resolveClauses' a as
+resolution :: [Clauses] -> Bool
+resolution [] = False
+resolution cs =
+  let resolvents = nub $ resolveClauses cs
   in
-    if [] `elem` resolvents
-    then True
-    else resolveClauses (as ++ resolvents)
+    if [] `elem` resolvents then True
+    else if subsetOf resolvents cs then False
+    else resolution (resolvents ++ cs)
+
+resolveClauses :: [Clauses] -> [Clauses]
+resolveClauses [] = []
+resolveClauses (c:cs) = resolveClauses' c cs ++ resolveClauses cs
 
 resolveClauses' :: Clauses -> [Clauses] -> [Clauses]
-resolveClauses' a [] = []
+resolveClauses' _ [] = []
 resolveClauses' a (b:bs) =
-  let res = [a ++ b] ++ resolveClauses' a bs
-  in dropIdenticals (dropOpposites res)
+  let new  = dropIdenticals [a ++ b]
+      new' = dropOpposites new
+  in
+    if new == new'
+    then resolveClauses' a bs
+    else new' ++ resolveClauses' a bs
 
 dropIdenticals :: [Clauses] -> [Clauses]
 dropIdenticals [] = []
-dropIdenticals (c:cs) = dropIdenticals' c : dropIdenticals cs
+dropIdenticals (c:cs) =
+  let c'  = nub c
+      cs' = dropIdenticals' c' cs
+  in c' : dropIdenticals cs'
+  where dropIdenticals' :: Clauses -> [Clauses] -> [Clauses]
+        dropIdenticals' a [] = []
+        dropIdenticals' a (b:bs) =
+          if eqClauses a b
+          then dropIdenticals' a bs
+          else b : dropIdenticals' a bs
 
-dropIdenticals' :: Clauses -> Clauses
-dropIdenticals' [] = []
-dropIdenticals' (c:cs) =
-  let cs' = dropIdenticals'' c cs
-  in
-    if cs == cs'
-    then c : dropIdenticals' cs
-    else dropIdenticals' cs
-
-dropIdenticals'' :: BoolExpression -> Clauses -> Clauses
-dropIdenticals'' e [] = []
-dropIdenticals'' e (c:cs)
-  | e == c = dropIdenticals'' e cs
-  | otherwise = c : dropIdenticals'' e cs
+countOpposites :: [Clauses] -> Integer
+countOpposites [] = 0
+countOpposites (c:cs) = countOpposites' c + countOpposites cs
+  where countOpposites' :: Clauses -> Integer
+        countOpposites' [] = 0
+        countOpposites' (c:cs) =
+          let opposite = cnf $ Not c
+              cs' = dropFromClauses opposite cs
+          in
+            if cs == cs'
+            then countOpposites' cs
+            else 1 + countOpposites' cs
 
 dropOpposites :: [Clauses] -> [Clauses]
 dropOpposites [] = []
-dropOpposites (c:cs) = dropOpposites' c : dropOpposites cs
+dropOpposites cs = dropOpposites' cs (countOpposites cs)
+  where dropOpposites' :: [Clauses] -> Integer -> [Clauses]
+        dropOpposites [] _ = []
+        dropOpposites' cs n
+          | n < 1 = []
+          | otherwise = dropNthOpposites cs (n-1) ++ dropOpposites' cs (n-1)
 
-dropOpposites' :: Clauses -> Clauses
-dropOpposites' [] = []
-dropOpposites' (c:cs) =
-  let cs' = dropOpposites'' c cs
-  in
-    if cs == cs'
-    then c : dropOpposites' cs
-    else dropOpposites' cs'
-
-dropOpposites'' :: BoolExpression -> Clauses -> Clauses
-dropOpposites'' e [] = []
-dropOpposites'' e (c:cs)
-  | cnf (Not e) == c = dropOpposites'' e cs
-  | otherwise = c : dropOpposites'' e cs
+dropNthOpposites :: [Clauses] -> Integer -> [Clauses]
+dropNthOpposites [] _ = []
+dropNthOpposites cs n = map (dropNthOpposites' n) cs
+  where dropNthOpposites' :: Integer -> Clauses -> Clauses
+        dropNthOpposites' _ [] = []
+        dropNthOpposites' n (c:cs) =
+          let opposite = cnf $ Not c
+              cs' = dropFromClauses opposite cs
+          in
+            if cs == cs' then c : dropNthOpposites' n cs
+            else if n < 1 then cs'
+            else c : dropNthOpposites' (n-1) cs
 
 --------------------------------------------------------------------------
 -- Assignment                                                           --
