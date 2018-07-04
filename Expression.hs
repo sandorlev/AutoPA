@@ -20,7 +20,7 @@ data Token = TokPlus | TokMinus
            | TokLT | TokLEQ | TokEQ | TokGEQ | TokGT | TokNEQ
            | TokAnd | TokOr | TokNot | TokTrue | TokFalse
            | TokEquiv | TokImplies | TokFollows
-           | TokLpar | TokRpar
+           | TokLpar | TokRpar | TokLsqPar | TokRsqPar
            | TokVariable String
            | TokBoundVariable String
            | TokConstant String
@@ -44,6 +44,8 @@ lexer (c : cs)
   | matchHead ":=" (c:cs) = TokAssign : lexer (drop 1 cs)
   | c == '(' = TokLpar:lexer cs
   | c == ')' = TokRpar:lexer cs
+  | c == '[' = TokLsqPar:lexer cs
+  | c == ']' = TokRsqPar:lexer cs
   | c == ';' = TokSemiColon : lexer cs
   -- boolean operators
   | matchHead "True" (c:cs) = TokTrue : lexer (drop 3 cs)
@@ -255,7 +257,7 @@ parseR tokens =
       TokGEQ -> ((lhs :>=: rhs), rest)
       TokGT -> ((lhs :>: rhs), rest)
       TokNEQ -> ((lhs :<>: rhs), rest)
-      _ -> error ("Syntax error: " ++ show tok)
+      _ -> error ("Syntax Error: " ++ show tok)
 
 --------------------------------------------------------------------------
 -- Boolean expression                                                   --
@@ -271,12 +273,12 @@ data BoolExpression = BoolExpression :&: BoolExpression
                     | Compare Relation
 
 instance Show BoolExpression where
-  show (lhs :&: rhs) = "(" ++ show lhs ++ " & " ++ show rhs ++ ")"
-  show (lhs :|: rhs) = "(" ++ show lhs ++ " | " ++ show rhs ++ ")"
-  show (lhs :->: rhs) = "(" ++ show lhs ++ " -> " ++ show rhs ++ ")"
-  show (lhs :<-: rhs) = "(" ++ show lhs ++ " <- " ++ show rhs ++ ")"
-  show (lhs :==: rhs) = "(" ++ show lhs ++ " == " ++ show rhs ++ ")"
-  show (Not e) = "~(" ++ show e ++ ")"
+  show (lhs :&: rhs) = "[" ++ show lhs ++ " & " ++ show rhs ++ "]"
+  show (lhs :|: rhs) = "[" ++ show lhs ++ " | " ++ show rhs ++ "]"
+  show (lhs :->: rhs) = "[" ++ show lhs ++ " -> " ++ show rhs ++ "]"
+  show (lhs :<-: rhs) = "[" ++ show lhs ++ " <- " ++ show rhs ++ "]"
+  show (lhs :==: rhs) = "[" ++ show lhs ++ " == " ++ show rhs ++ "]"
+  show (Not e) = "~[" ++ show e ++ "]"
   show (BoolConst val) = show val
   show (Compare rel) = show rel
 
@@ -351,7 +353,7 @@ parseC' lhs tokens = (lhs, tokens)
 -- U -> "True"
 -- U -> "False"
 -- U -> "~" U
--- U -> "(" I ")"
+-- U -> "[" I "]"
 -- U -> R
 parseU :: [Token] -> (BoolExpression, [Token])
 parseU (tok : tokens) =
@@ -361,10 +363,10 @@ parseU (tok : tokens) =
     TokNot ->
       let (exp, rest) = parseU tokens
       in (Not exp, rest)
-    TokLpar ->
+    TokLsqPar ->
       let (exp, (next : rest)) = parseI tokens
       in
-        if next /= TokRpar
+        if next /= TokRsqPar
           then error "Missing right parenthesis"
           else (exp, rest)
     _ ->
@@ -396,6 +398,7 @@ pushAndEliminateNot e = pushNot 0 e
   where
     pushNot 1 (BoolConst e)  = BoolConst (not e)
     pushNot 1 (Compare r) = Not (Compare r)
+    --pushNot 1 (Compare r) = Compare (flipRelation r)
     pushNot 1 (Not e) = pushNot 0 e
     pushNot 1 (lhs :&: rhs) = pushNot 1 lhs :|: pushNot 1 rhs
     pushNot 1 (lhs :|: rhs) = pushNot 1 lhs :&: pushNot 1 rhs
@@ -403,6 +406,12 @@ pushAndEliminateNot e = pushNot 0 e
     pushNot 0 (lhs :&: rhs) = pushNot 0 lhs :&: pushNot 0 rhs
     pushNot 0 (Not e) = pushNot 1 e
     pushNot 0 e = e
+    --flipRelation (a :<: b) = (a :>=: b)
+    --flipRelation (a :<=: b) = (a :>: b)
+    --flipRelation (a :=: b) = (a :<>: b)
+    --flipRelation (a :>=: b) = (a :<: b)
+    --flipRelation (a :>: b) = (a :<=: b)
+    --flipRelation (a :<>: b) = (a :=: b)
 
 {- this does not work yet
 distributeOrOverAnd :: BoolExpression -> BoolExpression
@@ -439,6 +448,10 @@ clauses' e = [clause e]
   where clause :: BoolExpression -> Clauses
         clause (lhs :|: rhs) = clause lhs ++ clause rhs
         clause e = [e]
+
+boolExprFromClauses :: Clauses -> BoolExpression
+boolExprFromClauses (c:[]) = c
+boolExprFromClauses (c:cs) = c :|: boolExprFromClauses cs
 
 dropFromClauses :: BoolExpression -> Clauses -> Clauses
 dropFromClauses _ [] = []
@@ -538,6 +551,16 @@ dropNthOpposites cs n = map (dropNthOpposites' n) cs
             if cs == cs' then c : dropNthOpposites' n cs
             else if n < 1 then cs'
             else c : dropNthOpposites' (n-1) cs
+
+findMgu :: Clauses -> [Clauses] -> Maybe Unifier
+findMgu a [] = Nothing
+findMgu a (b:bs) =
+  let a' = boolExprFromClauses a
+      b' = boolExprFromClauses b
+  in
+    case mgu a' b' (Just []) of
+      Nothing -> findMgu a bs
+      Just u -> Just u
 
 --------------------------------------------------------------------------
 -- Assignment                                                           --
@@ -732,7 +755,8 @@ eliminateMinus exp = exp
 -- Unify                                                                --
 --------------------------------------------------------------------------
 
-type Unifier =  [(String, ArithExpression)]
+type Substitution = (String, ArithExpression)
+type Unifier =  [Substitution]
 
 occurCheck :: String -> ArithExpression -> Bool
 occurCheck var (BoundVariable e) = (var==e)
@@ -808,37 +832,80 @@ mguBexp (BoolConst e0) (BoolConst e1) theta = if e0==e1 then theta else Nothing
 mguBexp (Compare e0) (Compare e1) theta = mguRel e0 e1 theta
 mguBexp _ _ _ = Nothing
 
-hasBoundVariable :: ArithExpression -> Bool
-hasBoundVariable (BoundVariable e) = True
-hasBoundVariable (UnaryMinus e) = hasBoundVariable e
-hasBoundVariable (l :+: r) = hasBoundVariable l || hasBoundVariable r
-hasBoundVariable (l :-: r) = hasBoundVariable l || hasBoundVariable r
-hasBoundVariable (l :*: r) = hasBoundVariable l || hasBoundVariable r
-hasBoundVariable (l :/: r) = hasBoundVariable l || hasBoundVariable r
-hasBoundVariable (l :%: r) = hasBoundVariable l || hasBoundVariable r
-hasBoundVariable (l :^: r) = hasBoundVariable l || hasBoundVariable r
+hasBoundVarArith :: ArithExpression -> Bool
+hasBoundVarArith (BoundVariable e) = True
+hasBoundVarArith (UnaryMinus e) = hasBoundVarArith e
+hasBoundVarArith (l :+: r) = hasBoundVarArith l || hasBoundVarArith r
+hasBoundVarArith (l :-: r) = hasBoundVarArith l || hasBoundVarArith r
+hasBoundVarArith (l :*: r) = hasBoundVarArith l || hasBoundVarArith r
+hasBoundVarArith (l :/: r) = hasBoundVarArith l || hasBoundVarArith r
+hasBoundVarArith (l :%: r) = hasBoundVarArith l || hasBoundVarArith r
+hasBoundVarArith (l :^: r) = hasBoundVarArith l || hasBoundVarArith r
+hasBoundVarArith e = False
+
+hasBoundVarRel :: Relation -> Bool
+hasBoundVarRel (l :<: r)  = hasBoundVarArith l || hasBoundVarArith r
+hasBoundVarRel (l :<=: r) = hasBoundVarArith l || hasBoundVarArith r
+hasBoundVarRel (l :=: r)  = hasBoundVarArith l || hasBoundVarArith r
+hasBoundVarRel (l :>=: r) = hasBoundVarArith l || hasBoundVarArith r
+hasBoundVarRel (l :>: r)  = hasBoundVarArith l || hasBoundVarArith r
+hasBoundVarRel (l :<>: r) = hasBoundVarArith l || hasBoundVarArith r
+
+hasBoundVariable :: BoolExpression -> Bool
+hasBoundVariable (l :&: r)  = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable (l :|: r)  = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable (l :->: r) = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable (l :<-: r) = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable (l :==: r) = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable (Not e) = hasBoundVariable e
+hasBoundVariable (Compare rel) = hasBoundVarRel rel
 hasBoundVariable e = False
 
 mgu :: BoolExpression -> BoolExpression -> Maybe Unifier -> Maybe Unifier
 mgu = mguBexp
 
+applySubstAexp :: Substitution -> ArithExpression -> ArithExpression
+applySubstAexp s (UnaryMinus e) = UnaryMinus (applySubstAexp s e)
+applySubstAexp s (l :+: r) = applySubstAexp s l :+: applySubstAexp s r
+applySubstAexp s (l :-: r) = applySubstAexp s l :-: applySubstAexp s r
+applySubstAexp s (l :*: r) = applySubstAexp s l :*: applySubstAexp s r
+applySubstAexp s (l :/: r) = applySubstAexp s l :/: applySubstAexp s r
+applySubstAexp s (l :%: r) = applySubstAexp s l :%: applySubstAexp s r
+applySubstAexp (var,e) (BoundVariable v) = if var==v then e else BoundVariable v
+applySubstAexp s e = e
+
+applySubstRel :: Substitution -> Relation -> Relation
+applySubstRel s (l0 :<: l1) = applySubstAexp s l0 :<: applySubstAexp s l1
+applySubstRel s (l0 :<=: l1) = applySubstAexp s l0 :<=: applySubstAexp s l1
+applySubstRel s (l0 :=: l1) = applySubstAexp s l0 :=: applySubstAexp s l1
+applySubstRel s (l0 :>=: l1) = applySubstAexp s l0 :>=: applySubstAexp s l1
+applySubstRel s (l0 :>: l1) = applySubstAexp s l0 :>: applySubstAexp s l1
+applySubstRel s (l0 :<>: l1) = applySubstAexp s l0 :<>: applySubstAexp s l1
+
+applySubstitution :: Substitution -> BoolExpression -> BoolExpression
+applySubstitution s (l0 :&: l1) = applySubstitution s l0 :&: applySubstitution s l1
+applySubstitution s (l0 :|: l1) = applySubstitution s l0 :|: applySubstitution s l1
+applySubstitution s (l0 :->: l1) = applySubstitution s l0 :->: applySubstitution s l1
+applySubstitution s (l0 :<-: l1) = applySubstitution s l0 :<-: applySubstitution s l1
+applySubstitution s (l0 :==: l1) = applySubstitution s l0 :==: applySubstitution s l1
+applySubstitution s (Not e) = Not (applySubstitution s e)
+applySubstitution s (Compare e) = Compare (applySubstRel s e)
+
+applySubstitutionStr :: String -> String -> String -> BoolExpression
+applySubstitutionStr var s e = applySubstitution (var,parseArithExpression s) (parseBoolExpression e)
+
+applyMGU :: Unifier -> BoolExpression -> BoolExpression
+applyMGU [] e = e
+applyMGU (s:theta) e =  applyMGU theta (applySubstitution s e)
+
+--applyMGUClauses :: [Clauses] -> [Clauses]
+--applyMGUClauses
+
 sure :: Maybe a -> a
 sure (Just x) = x
 
-applyMGU :: Unifier -> ArithExpression -> ArithExpression 
-applyMGU theta (BoundVariable v) = let e = getUnification v theta in
-   if e /= (BoundVariable v) then applyMGU theta e else e
-applyMGU theta (UnaryMinus e) = UnaryMinus (applyMGU theta e)
-applyMGU theta (l :+: r) = applyMGU theta l :+: applyMGU theta r
-applyMGU theta (l :-: r) = applyMGU theta l :-: applyMGU theta r
-applyMGU theta (l :*: r) = applyMGU theta l :*: applyMGU theta r
-applyMGU theta (l :/: r) = applyMGU theta l :/: applyMGU theta r
-applyMGU theta (l :%: r) = applyMGU theta l :%: applyMGU theta r
-applyMGU theta (l :^: r) = applyMGU theta l :^: applyMGU theta r
-applyMGU theta e = e
-
-simplifyMGU :: Unifier -> Unifier
-simplifyMGU theta = map (\(v,e) -> (v,applyMGU theta e)) theta
+--simplifyMGU :: Unifier -> Unifier
+--simplifyMGU theta = map (\(v,e) -> (v,applyMGU theta e)) theta
 
 testAmgu :: String -> String -> Maybe Unifier
 testAmgu s0 s1 = mguAexp (parseArithExpression s0) (parseArithExpression s1) (Just [])
@@ -848,7 +915,7 @@ testmgu s0 s1 = mgu (parseBoolExpression s0) (parseBoolExpression s1) (Just [])
 
 chain = sure $ testmgu  "#a+#b+#c+#d<#e"  "#b+#c+#d+#e<0"
 --circle= sure $ testmgu  "#a=#b"  "#b=#a"
-circle= sure $ testmgu  "#a-#b=0"  "#b-#a=0"
+circle = sure $ testmgu  "#a-#b=0"  "#b-#a=0"
 
 negationOf :: BoolExpression -> BoolExpression -> Bool
 negationOf a b = cnf (Not a) == cnf b
