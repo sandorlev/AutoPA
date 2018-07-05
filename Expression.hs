@@ -449,10 +449,6 @@ clauses' e = [clause e]
         clause (lhs :|: rhs) = clause lhs ++ clause rhs
         clause e = [e]
 
-boolExprFromClauses :: Clauses -> BoolExpression
-boolExprFromClauses (c:[]) = c
-boolExprFromClauses (c:cs) = c :|: boolExprFromClauses cs
-
 dropFromClauses :: BoolExpression -> Clauses -> Clauses
 dropFromClauses _ [] = []
 dropFromClauses exp (c:cs)
@@ -498,11 +494,12 @@ resolveClauses' :: Clauses -> [Clauses] -> [Clauses]
 resolveClauses' _ [] = []
 resolveClauses' a (b:bs) =
   let new  = dropIdenticals [a ++ b]
-      new' = dropOpposites new
+      new' = applyMGUs (findOppositeMGUs new) new
+      res  = dropOpposites new'
   in
-    if new == new'
+    if res == new
     then resolveClauses' a bs
-    else new' ++ resolveClauses' a bs
+    else res ++ resolveClauses' a bs
 
 dropIdenticals :: [Clauses] -> [Clauses]
 dropIdenticals [] = []
@@ -552,15 +549,20 @@ dropNthOpposites cs n = map (dropNthOpposites' n) cs
             else if n < 1 then cs'
             else c : dropNthOpposites' (n-1) cs
 
-findMgu :: Clauses -> [Clauses] -> Maybe Unifier
-findMgu a [] = Nothing
-findMgu a (b:bs) =
-  let a' = boolExprFromClauses a
-      b' = boolExprFromClauses b
-  in
-    case mgu a' b' (Just []) of
-      Nothing -> findMgu a bs
-      Just u -> Just u
+findOppositeMGUs :: [Clauses] -> [Unifier]
+findOppositeMGUs [] = []
+findOppositeMGUs (a:as) = findOppositeMGUsClauses a ++ findOppositeMGUs as
+
+findOppositeMGUsClauses :: Clauses -> [Unifier]
+findOppositeMGUsClauses [] = []
+findOppositeMGUsClauses (a:as) = findOppositeMGUsBoolExpr a as ++ findOppositeMGUsClauses as
+
+findOppositeMGUsBoolExpr :: BoolExpression -> Clauses -> [Unifier]
+findOppositeMGUsBoolExpr e [] = []
+findOppositeMGUsBoolExpr e (c:cs) =
+  case mgu (cnf $ Not e) c (Just []) of
+    Just theta -> theta : findOppositeMGUsBoolExpr e cs
+    _ -> findOppositeMGUsBoolExpr e cs
 
 --------------------------------------------------------------------------
 -- Assignment                                                           --
@@ -892,14 +894,24 @@ applySubstitution s (Not e) = Not (applySubstitution s e)
 applySubstitution s (Compare e) = Compare (applySubstRel s e)
 
 applySubstitutionStr :: String -> String -> String -> BoolExpression
-applySubstitutionStr var s e = applySubstitution (var,parseArithExpression s) (parseBoolExpression e)
+applySubstitutionStr var s e = applySubstitution (var, parseArithExpression s) (parseBoolExpression e)
 
-applyMGU :: Unifier -> BoolExpression -> BoolExpression
-applyMGU [] e = e
-applyMGU (s:theta) e =  applyMGU theta (applySubstitution s e)
+applyMGUBoolExpr :: Unifier -> BoolExpression -> BoolExpression
+applyMGUBoolExpr [] e = e
+applyMGUBoolExpr (s:theta) e = applyMGUBoolExpr theta (applySubstitution s e)
 
---applyMGUClauses :: [Clauses] -> [Clauses]
---applyMGUClauses
+applyMGUClauses :: Unifier -> Clauses -> Clauses
+applyMGUClauses _ [] = []
+applyMGUClauses [] cs = cs
+applyMGUClauses theta (c:cs) = applyMGUBoolExpr theta c : applyMGUClauses theta cs
+
+applyMGUsClauses :: [Unifier] -> Clauses -> Clauses
+applyMGUsClauses [] cs = cs
+applyMGUsClauses (s:theta) cs = applyMGUsClauses theta (applyMGUClauses s cs)
+
+applyMGUs :: [Unifier] -> [Clauses] -> [Clauses]
+applyMGUs _ [] = []
+applyMGUs theta (c:cs) = applyMGUsClauses theta c : applyMGUs theta cs
 
 sure :: Maybe a -> a
 sure (Just x) = x
