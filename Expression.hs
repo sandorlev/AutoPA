@@ -6,9 +6,9 @@ import System.Random
 -- Knowledge Base                                                       --
 --------------------------------------------------------------------------
 
-knowledgeBase = [
-       "#x=#y -> #y=#x"
-     ]
+--knowledgeBase = [
+--       "#x=#y -> #y=#x"
+--     ]
 
 
 --------------------------------------------------------------------------
@@ -263,8 +263,8 @@ parseR tokens =
 -- Boolean expression                                                   --
 --------------------------------------------------------------------------
 
-data BoolExpression = BoolExpression :&: BoolExpression
-                    | BoolExpression :|: BoolExpression
+data BoolExpression = BoolExpression :&&: BoolExpression
+                    | BoolExpression :||: BoolExpression
                     | BoolExpression :->: BoolExpression
                     | BoolExpression :<-: BoolExpression
                     | BoolExpression :==: BoolExpression
@@ -273,8 +273,8 @@ data BoolExpression = BoolExpression :&: BoolExpression
                     | Compare Relation
 
 instance Show BoolExpression where
-  show (lhs :&: rhs) = "[" ++ show lhs ++ " & " ++ show rhs ++ "]"
-  show (lhs :|: rhs) = "[" ++ show lhs ++ " | " ++ show rhs ++ "]"
+  show (lhs :&&: rhs) = "[" ++ show lhs ++ " & " ++ show rhs ++ "]"
+  show (lhs :||: rhs) = "[" ++ show lhs ++ " | " ++ show rhs ++ "]"
   show (lhs :->: rhs) = "[" ++ show lhs ++ " -> " ++ show rhs ++ "]"
   show (lhs :<-: rhs) = "[" ++ show lhs ++ " <- " ++ show rhs ++ "]"
   show (lhs :==: rhs) = "[" ++ show lhs ++ " == " ++ show rhs ++ "]"
@@ -283,8 +283,8 @@ instance Show BoolExpression where
   show (Compare rel) = show rel
 
 instance Eq BoolExpression where
-  l0 :&: r0 == l1 :&: r1       = l0 == l1 && r0 == r1
-  l0 :|: r0 == l1 :|: r1       = l0 == l1 && r0 == r1
+  l0 :&&: r0 == l1 :&&: r1     = l0 == l1 && r0 == r1
+  l0 :||: r0 == l1 :||: r1     = l0 == l1 && r0 == r1
   l0 :->: r0 == l1 :->: r1     = l0 == l1 && r0 == r1
   l0 :<-: r0 == l1 :<-: r1     = l0 == l1 && r0 == r1
   l0 :==: r0 == l1 :==: r1     = l0 == l1 && r0 == r1
@@ -332,7 +332,7 @@ parseB tokens =
 parseB' :: BoolExpression -> [Token] -> (BoolExpression, [Token])
 parseB' lhs (TokOr : tokens) =
   let (rhs, rest) = parseC tokens
-  in parseB' (lhs :|: rhs) rest
+  in parseB' (lhs :||: rhs) rest
 parseB' lhs tokens = (lhs, tokens)
 
 -- C -> U {C'}
@@ -347,7 +347,7 @@ parseC tokens =
 parseC' :: BoolExpression -> [Token] -> (BoolExpression, [Token])
 parseC' lhs (TokAnd : tokens) =
   let (rhs, rest) = parseU tokens
-  in (parseC' (lhs :&: rhs) rest)
+  in (parseC' (lhs :&&: rhs) rest)
 parseC' lhs tokens = (lhs, tokens)
 
 -- U -> "True"
@@ -378,18 +378,18 @@ parseU (tok : tokens) =
 --------------------------------------------------------------------------
 
 eliminateEquiv :: BoolExpression -> BoolExpression
-eliminateEquiv (lhs :==: rhs) = (l :->: r) :&: (r :->: l)
+eliminateEquiv (lhs :==: rhs) = (l :->: r) :&&: (r :->: l)
   where (l,r)=(eliminateEquiv lhs, eliminateEquiv rhs)
 eliminateEquiv (lhs :<-: rhs) = eliminateEquiv lhs :<-: eliminateEquiv rhs
 eliminateEquiv (Not e) = Not (eliminateEquiv e)
 eliminateEquiv e = e
 
 eliminateImplication :: BoolExpression -> BoolExpression
-eliminateImplication (lhs :->: rhs) = (Not l) :|: r
+eliminateImplication (lhs :->: rhs) = (Not l) :||: r
   where (l,r)=(eliminateImplication lhs, eliminateImplication rhs)
 eliminateImplication (lhs :<-: rhs) = eliminateImplication (rhs :->: lhs)
-eliminateImplication (lhs :&: rhs) = eliminateImplication lhs :&: eliminateImplication rhs
-eliminateImplication (lhs :|: rhs) = eliminateImplication lhs :|: eliminateImplication rhs
+eliminateImplication (lhs :&&: rhs) = eliminateImplication lhs :&&: eliminateImplication rhs
+eliminateImplication (lhs :||: rhs) = eliminateImplication lhs :||: eliminateImplication rhs
 eliminateImplication (Not e) = Not (eliminateImplication e)
 eliminateImplication e = e
 
@@ -400,10 +400,10 @@ pushAndEliminateNot e = pushNot 0 e
     pushNot 1 (Compare r) = Not (Compare r)
     --pushNot 1 (Compare r) = Compare (flipRelation r)
     pushNot 1 (Not e) = pushNot 0 e
-    pushNot 1 (lhs :&: rhs) = pushNot 1 lhs :|: pushNot 1 rhs
-    pushNot 1 (lhs :|: rhs) = pushNot 1 lhs :&: pushNot 1 rhs
-    pushNot 0 (lhs :|: rhs) = pushNot 0 lhs :|: pushNot 0 rhs
-    pushNot 0 (lhs :&: rhs) = pushNot 0 lhs :&: pushNot 0 rhs
+    pushNot 1 (lhs :&&: rhs) = pushNot 1 lhs :||: pushNot 1 rhs
+    pushNot 1 (lhs :||: rhs) = pushNot 1 lhs :&&: pushNot 1 rhs
+    pushNot 0 (lhs :||: rhs) = pushNot 0 lhs :||: pushNot 0 rhs
+    pushNot 0 (lhs :&&: rhs) = pushNot 0 lhs :&&: pushNot 0 rhs
     pushNot 0 (Not e) = pushNot 1 e
     pushNot 0 e = e
     --flipRelation (a :<: b) = (a :>=: b)
@@ -425,10 +425,10 @@ distributeOrOverAnd :: BoolExpression -> BoolExpression
 distributeOrOverAnd exp = if done then e else (distributeOrOverAnd e)
   where (done,e)=distribute exp
         distribute :: BoolExpression -> (Bool, BoolExpression)
-        distribute ((l :&: r) :|: rhs) = (False, (l :|: rhs) :&: (r :|: rhs))
-        distribute (lhs :|: (l :&: r)) = (False, (lhs :|: l) :&: (lhs :|: r))
-        distribute (lhs :|: rhs) = let ((bl,l),(br,r))=(distribute lhs,distribute rhs) in (bl&&br,l :|: r)
-        distribute (lhs :&: rhs) = let ((bl,l),(br,r))=(distribute lhs,distribute rhs) in (bl&&br,l :&: r)
+        distribute ((l :&&: r) :||: rhs) = (False, (l :||: rhs) :&&: (r :||: rhs))
+        distribute (lhs :||: (l :&&: r)) = (False, (lhs :||: l) :&&: (lhs :||: r))
+        distribute (lhs :||: rhs) = let ((bl,l),(br,r))=(distribute lhs,distribute rhs) in (bl&&br,l :||: r)
+        distribute (lhs :&&: rhs) = let ((bl,l),(br,r))=(distribute lhs,distribute rhs) in (bl&&br,l :&&: r)
         distribute e = (True, e)
 
 cnf :: BoolExpression -> BoolExpression
@@ -443,10 +443,10 @@ clauses :: BoolExpression -> [Clauses]
 clauses e = clauses' $ cnf e
 
 clauses' :: BoolExpression -> [Clauses]
-clauses' (lhs :&: rhs) = clauses' lhs ++ clauses' rhs
+clauses' (lhs :&&: rhs) = clauses' lhs ++ clauses' rhs
 clauses' e = [clause e]
   where clause :: BoolExpression -> Clauses
-        clause (lhs :|: rhs) = clause lhs ++ clause rhs
+        clause (lhs :||: rhs) = clause lhs ++ clause rhs
         clause e = [e]
 
 dropFromClauses :: BoolExpression -> Clauses -> Clauses
@@ -561,8 +561,8 @@ findOppositeMGUsBoolExpr :: BoolExpression -> Clauses -> [Unifier]
 findOppositeMGUsBoolExpr e [] = []
 findOppositeMGUsBoolExpr e (c:cs) =
   case mgu (cnf $ Not e) c (Just []) of
-    Just theta -> theta : findOppositeMGUsBoolExpr e cs
-    _ -> findOppositeMGUsBoolExpr e cs
+      Just theta -> theta : findOppositeMGUsBoolExpr e cs
+      _ -> findOppositeMGUsBoolExpr e cs
 
 --------------------------------------------------------------------------
 -- Assignment                                                           --
@@ -625,8 +625,8 @@ wpRel ass (lhs :>: rhs) = wpArithExp ass lhs :>: wpArithExp ass rhs
 wpRel ass (lhs :<>: rhs) = wpArithExp ass lhs :<>: wpArithExp ass rhs
 
 wp0 :: Assignment -> BoolExpression -> BoolExpression
-wp0 ass (lhs :&: rhs) = wp0 ass lhs :&: wp0 ass rhs
-wp0 ass (lhs :|: rhs) = wp0 ass lhs :|: wp0 ass rhs
+wp0 ass (lhs :&&: rhs) = wp0 ass lhs :&&: wp0 ass rhs
+wp0 ass (lhs :||: rhs) = wp0 ass lhs :||: wp0 ass rhs
 wp0 ass (lhs :->: rhs) = wp0 ass lhs :->: wp0 ass rhs
 wp0 ass (lhs :<-: rhs) = wp0 ass lhs :<-: wp0 ass rhs
 wp0 ass (lhs :==: rhs) = wp0 ass lhs :==: wp0 ass rhs
@@ -732,8 +732,8 @@ evalRelation (lhs :>: rhs) vals = evalRelation (rhs :<: lhs) vals
 evalRelation (lhs :<>: rhs) vals = not (evalRelation (rhs :=: lhs) vals)
 
 evalBoolExpression :: BoolExpression -> [Valuation] -> Bool
-evalBoolExpression (lhs :&: rhs) vals = (evalBoolExpression lhs vals) && (evalBoolExpression rhs vals)
-evalBoolExpression (lhs :|: rhs) vals = (evalBoolExpression lhs vals) || (evalBoolExpression rhs vals)
+evalBoolExpression (lhs :&&: rhs) vals = (evalBoolExpression lhs vals) && (evalBoolExpression rhs vals)
+evalBoolExpression (lhs :||: rhs) vals = (evalBoolExpression lhs vals) || (evalBoolExpression rhs vals)
 evalBoolExpression (Not exp) vals = not (evalBoolExpression exp vals)
 evalBoolExpression (Compare rel) vals = evalRelation rel vals
 
@@ -824,8 +824,8 @@ mguRel _ _ _ = Nothing
 
 mguBexp :: BoolExpression -> BoolExpression -> Maybe Unifier -> Maybe Unifier
 mguBexp e0 e1 Nothing = Nothing
-mguBexp (l0 :&: l1) (r0 :&: r1) theta = mguBexp l1 r1 (mguBexp l0 r0 theta)
-mguBexp (l0 :|: l1) (r0 :|: r1) theta = mguBexp l1 r1 (mguBexp l0 r0 theta)
+mguBexp (l0 :&&: l1) (r0 :&&: r1) theta = mguBexp l1 r1 (mguBexp l0 r0 theta)
+mguBexp (l0 :||: l1) (r0 :||: r1) theta = mguBexp l1 r1 (mguBexp l0 r0 theta)
 mguBexp (l0 :->: l1) (r0 :->: r1) theta = mguBexp l1 r1 (mguBexp l0 r0 theta)
 mguBexp (l0 :<-: l1) (r0 :<-: r1) theta = mguBexp l1 r1 (mguBexp l0 r0 theta)
 mguBexp (l0 :==: l1) (r0 :==: r1) theta = mguBexp l1 r1 (mguBexp l0 r0 theta)
@@ -854,8 +854,8 @@ hasBoundVarRel (l :>: r)  = hasBoundVarArith l || hasBoundVarArith r
 hasBoundVarRel (l :<>: r) = hasBoundVarArith l || hasBoundVarArith r
 
 hasBoundVariable :: BoolExpression -> Bool
-hasBoundVariable (l :&: r)  = hasBoundVariable l || hasBoundVariable r
-hasBoundVariable (l :|: r)  = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable (l :&&: r) = hasBoundVariable l || hasBoundVariable r
+hasBoundVariable (l :||: r) = hasBoundVariable l || hasBoundVariable r
 hasBoundVariable (l :->: r) = hasBoundVariable l || hasBoundVariable r
 hasBoundVariable (l :<-: r) = hasBoundVariable l || hasBoundVariable r
 hasBoundVariable (l :==: r) = hasBoundVariable l || hasBoundVariable r
@@ -885,8 +885,8 @@ applySubstRel s (l0 :>: l1) = applySubstAexp s l0 :>: applySubstAexp s l1
 applySubstRel s (l0 :<>: l1) = applySubstAexp s l0 :<>: applySubstAexp s l1
 
 applySubstitution :: Substitution -> BoolExpression -> BoolExpression
-applySubstitution s (l0 :&: l1) = applySubstitution s l0 :&: applySubstitution s l1
-applySubstitution s (l0 :|: l1) = applySubstitution s l0 :|: applySubstitution s l1
+applySubstitution s (l0 :&&: l1) = applySubstitution s l0 :&&: applySubstitution s l1
+applySubstitution s (l0 :||: l1) = applySubstitution s l0 :||: applySubstitution s l1
 applySubstitution s (l0 :->: l1) = applySubstitution s l0 :->: applySubstitution s l1
 applySubstitution s (l0 :<-: l1) = applySubstitution s l0 :<-: applySubstitution s l1
 applySubstitution s (l0 :==: l1) = applySubstitution s l0 :==: applySubstitution s l1
@@ -931,3 +931,26 @@ circle = sure $ testmgu  "#a-#b=0"  "#b-#a=0"
 
 negationOf :: BoolExpression -> BoolExpression -> Bool
 negationOf a b = cnf (Not a) == cnf b
+
+
+-- TEST
+knowledgeBase = [
+       "~(#a+#b)-#b=#c -> ~#a=#c",
+       "~#a-(#a-#b)=#c -> ~#b=#c"
+     ]
+
+kbClauses :: [String] -> [Clauses]
+kbClauses [] = []
+kbClauses cs = clauses $ joinExpressions (map parseBoolExpression cs)
+  where joinExpressions :: [BoolExpression] -> BoolExpression
+        joinExpressions [] = error "Empty knowledge base"
+        joinExpressions (a:[]) = a
+        joinExpressions (a:as) = a :&&: joinExpressions as
+
+getKB :: String -> String -> String -> [Clauses]
+getKB preStr assStr postStr =
+  let precondition = parseBoolExpression preStr
+      weakest = wp assStr postStr
+      cs = clauses $ Not (precondition :->: weakest)
+      kb = kbClauses knowledgeBase
+  in cs ++ kb
