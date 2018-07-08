@@ -438,6 +438,16 @@ cnfstr :: String -> BoolExpression
 cnfstr s = cnf $ parseBoolExpression s
 
 type Clauses = [BoolExpression]
+type ProofClauses = ((Integer, Integer, Integer), [BoolExpression])
+
+showProofClauses :: [ProofClauses] -> String
+showProofClauses [] = "\n"
+showProofClauses (a:[]) = showProofClauses' a ++ "\n"
+showProofClauses (a:as) = showProofClauses' a ++ "\n" ++ showProofClauses as
+
+showProofClauses' :: ProofClauses -> String
+showProofClauses' ((l, r, id), exps) =
+  "((" ++ show l ++ ", " ++ show r ++ ", " ++ show id ++ "), " ++ show exps ++ ")"
 
 clauses :: BoolExpression -> [Clauses]
 clauses e = clauses' $ cnf e
@@ -449,11 +459,25 @@ clauses' e = [clause e]
         clause (lhs :||: rhs) = clause lhs ++ clause rhs
         clause e = [e]
 
+numberClauses :: [Clauses] -> [ProofClauses]
+numberClauses cs = numberClauses' 1 cs
+  where numberClauses' :: Integer -> [Clauses] -> [ProofClauses]
+        numberClauses' _ [] = []
+        numberClauses' n (c:cs) = csToProof c 0 0 n : numberClauses' (n+1) cs
+        csToProof :: Clauses -> Integer -> Integer -> Integer -> ProofClauses
+        csToProof cs p1 p2 n = ((p1, p2, n), cs)
+
 dropFromClauses :: BoolExpression -> Clauses -> Clauses
 dropFromClauses _ [] = []
 dropFromClauses exp (c:cs)
   | exp == c = cs
   | otherwise = c : dropFromClauses exp cs
+
+pdropFromClauses :: BoolExpression -> ProofClauses -> ProofClauses
+pdropFromClauses _ (i, []) = (i, [])
+pdropFromClauses exp (i, (a:as))
+  | exp == a = (i, as)
+  | otherwise = (i, a : dropFromClauses exp as)
 
 eqClauses :: Clauses -> Clauses -> Bool
 eqClauses [] [] = True
@@ -465,6 +489,9 @@ eqClauses (a:as) bs =
     else eqClauses as bs'
 eqClauses x y = False
 
+peqClauses :: ProofClauses -> ProofClauses -> Bool
+peqClauses (_, a) (_, b) = eqClauses a b
+
 subsetOf :: [Clauses] -> [Clauses] -> Bool
 subsetOf [] _ = True
 subsetOf _ [] = False
@@ -472,10 +499,22 @@ subsetOf (a:as) bs = subsetOf' a bs && subsetOf as bs
   where subsetOf' :: Clauses -> [Clauses] -> Bool
         subsetOf' [] _ = True
         subsetOf' _ [] = False
-        subsetOf' a (c:cs) = eqClauses a c || subsetOf' a cs
+        subsetOf' a (b:bs) = eqClauses a b || subsetOf' a bs
+
+psubsetOf :: [ProofClauses] -> [ProofClauses] -> Bool
+psubsetOf [] _ = True
+psubsetOf _ [] = False
+psubsetOf (a:as) bs = psubsetOf' a bs && psubsetOf as bs
+  where psubsetOf' :: ProofClauses -> [ProofClauses] -> Bool
+        psubsetOf' (_, []) _ = True
+        psubsetOf' _ [] = False
+        psubsetOf' a (b:bs) = peqClauses a b || psubsetOf' a bs
 
 clausesstr :: String -> [Clauses]
 clausesstr s = clauses $ parseBoolExpression s
+
+pclausesstr :: String -> [ProofClauses]
+pclausesstr s = numberClauses $ clausesstr s
 
 resolution :: [Clauses] -> Bool
 resolution [] = False
@@ -485,6 +524,42 @@ resolution cs =
     if [] `elem` resolvents then True
     else if subsetOf resolvents cs then False
     else resolution (resolvents ++ cs)
+
+hasEmpty :: [ProofClauses] -> (Bool, Integer)
+hasEmpty [] = (False, 0)
+hasEmpty (((_, _, id), []):_) = (True, id)
+hasEmpty (_:cs) = hasEmpty cs
+
+findProofClauses :: Integer -> [ProofClauses] -> ProofClauses
+findProofClauses _ [] = ((0, 0, 0), [])
+findProofClauses n (((lp, rp, id), c):cs)
+  | n == id = ((lp, rp, id), c)
+  | otherwise = findProofClauses n cs
+
+extractProof :: Integer -> [ProofClauses] -> [ProofClauses]
+extractProof 0 cs = []
+extractProof n cs =
+  let ((lp, rp, id), c) = findProofClauses n cs
+  in sortProof $ ((lp, rp, id), c) : extractProof lp cs ++ extractProof rp cs
+
+compareProof ((lp1, rp1, id1), cs1) ((lp2, rp2, id2), cs2)
+  | id1 < id2 = LT
+  | id1 > id2 = GT
+  | otherwise = compare lp1 lp2
+
+sortProof :: [ProofClauses] -> [ProofClauses]
+sortProof cs = nub $ sortBy compareProof cs
+
+presolution :: [ProofClauses] -> (Bool, [ProofClauses])
+presolution [] = (False, [])
+presolution cs =
+  let resolvents = nub $ presolveClauses cs
+      (empty, id) = hasEmpty resolvents
+      proof = extractProof id (cs ++ resolvents) 
+  in
+    if empty then (True, proof)
+    else if psubsetOf resolvents cs then (False, proof)
+    else presolution (resolvents ++ cs)
 
 resolveClauses :: [Clauses] -> [Clauses]
 resolveClauses [] = []
@@ -501,6 +576,31 @@ resolveClauses' a (b:bs) =
     then resolveClauses' a bs
     else res ++ resolveClauses' a bs
 
+concatProofClauses :: Integer -> ProofClauses -> ProofClauses -> ProofClauses
+concatProofClauses id ((_, _, lid), lcs) ((_, _, rid), rcs) = ((lid, rid, id), lcs ++ rcs)
+
+nextId :: [ProofClauses] -> Integer
+nextId cs = nextId' 1 cs
+  where nextId' :: Integer -> [ProofClauses] -> Integer
+        nextId' n [] = n
+        nextId' n (((_, _, id), c):cs) = nextId' (n `max` id) cs
+
+presolveClauses :: [ProofClauses] -> [ProofClauses]
+presolveClauses [] = []
+presolveClauses (c:cs) =
+  let next = nextId (c:cs)
+  in presolveClauses' next c cs ++ presolveClauses cs
+  where presolveClauses' :: Integer -> ProofClauses -> [ProofClauses] -> [ProofClauses]
+        presolveClauses' _ _ [] = []
+        presolveClauses' n a (b:bs) =
+          let new  = pdropIdenticals [concatProofClauses (n+1) a b]
+              new' = papplyMGUs (pfindOppositeMGUs new) new
+              res  = pdropOpposites new'
+          in
+            if res == new
+            then presolveClauses' n a bs
+            else res ++ presolveClauses' (n+1) a bs
+
 dropIdenticals :: [Clauses] -> [Clauses]
 dropIdenticals [] = []
 dropIdenticals (c:cs) =
@@ -508,24 +608,45 @@ dropIdenticals (c:cs) =
       cs' = dropIdenticals' c' cs
   in c' : dropIdenticals cs'
   where dropIdenticals' :: Clauses -> [Clauses] -> [Clauses]
-        dropIdenticals' a [] = []
+        dropIdenticals' _ [] = []
         dropIdenticals' a (b:bs) =
           if eqClauses a b
           then dropIdenticals' a bs
           else b : dropIdenticals' a bs
 
+pdropIdenticals :: [ProofClauses] -> [ProofClauses]
+pdropIdenticals [] = []
+pdropIdenticals ((i, c):cs) =
+  let c'  = nub c
+      cs' = pdropIdenticals' (i, c') cs
+  in (i, c') : pdropIdenticals cs'
+  where pdropIdenticals' :: ProofClauses -> [ProofClauses] -> [ProofClauses]
+        pdropIdenticals' _ [] = []
+        pdropIdenticals' a (b:bs) =
+          if peqClauses a b
+          then pdropIdenticals' a bs
+          else b : pdropIdenticals' a bs
+
 countOpposites :: [Clauses] -> Integer
 countOpposites [] = 0
 countOpposites (c:cs) = countOpposites' c + countOpposites cs
-  where countOpposites' :: Clauses -> Integer
-        countOpposites' [] = 0
-        countOpposites' (c:cs) =
-          let opposite = cnf $ Not c
-              cs' = dropFromClauses opposite cs
-          in
-            if cs == cs'
-            then countOpposites' cs
-            else 1 + countOpposites' cs
+
+countOpposites' :: Clauses -> Integer
+countOpposites' [] = 0
+countOpposites' (c:cs) =
+  let opposite = cnf $ Not c
+      cs' = dropFromClauses opposite cs
+  in
+    if cs == cs'
+    then countOpposites' cs
+    else 1 + countOpposites' cs
+
+pcountOpposites :: [ProofClauses] -> Integer
+pcountOpposites [] = 0
+pcountOpposites (c:cs) = pcountOpposites' c + pcountOpposites cs
+  where pcountOpposites' :: ProofClauses -> Integer
+        pcountOpposites' (_, []) = 0
+        pcountOpposites' (_, as) = countOpposites' as
 
 dropOpposites :: [Clauses] -> [Clauses]
 dropOpposites [] = []
@@ -536,22 +657,41 @@ dropOpposites cs = dropOpposites' cs (countOpposites cs)
           | n < 1 = []
           | otherwise = dropNthOpposites cs (n-1) ++ dropOpposites' cs (n-1)
 
+pdropOpposites :: [ProofClauses] -> [ProofClauses]
+pdropOpposites [] = []
+pdropOpposites cs = pdropOpposites' cs (pcountOpposites cs)
+  where pdropOpposites' :: [ProofClauses] -> Integer -> [ProofClauses]
+        pdropOpposites [] _ = []
+        pdropOpposites' cs n
+          | n < 1 = []
+          | otherwise = pdropNthOpposites cs (n-1) ++ pdropOpposites' cs (n-1)
+
 dropNthOpposites :: [Clauses] -> Integer -> [Clauses]
-dropNthOpposites [] _ = []
 dropNthOpposites cs n = map (dropNthOpposites' n) cs
-  where dropNthOpposites' :: Integer -> Clauses -> Clauses
-        dropNthOpposites' _ [] = []
-        dropNthOpposites' n (c:cs) =
-          let opposite = cnf $ Not c
-              cs' = dropFromClauses opposite cs
-          in
-            if cs == cs' then c : dropNthOpposites' n cs
-            else if n < 1 then cs'
-            else c : dropNthOpposites' (n-1) cs
+
+dropNthOpposites' :: Integer -> Clauses -> Clauses
+dropNthOpposites' _ [] = []
+dropNthOpposites' n (c:cs) =
+  let opposite = cnf $ Not c
+      cs' = dropFromClauses opposite cs
+  in
+    if cs == cs' then c : dropNthOpposites' n cs
+    else if n < 1 then cs'
+    else c : dropNthOpposites' (n-1) cs
+
+pdropNthOpposites :: [ProofClauses] -> Integer -> [ProofClauses]
+pdropNthOpposites cs n = map (pdropNthOpposites' n) cs
+  where pdropNthOpposites' :: Integer -> ProofClauses -> ProofClauses
+        pdropNthOpposites' _ (i, []) = (i, [])
+        pdropNthOpposites' n (i, cs) = (i, dropNthOpposites' n cs)
 
 findOppositeMGUs :: [Clauses] -> [Unifier]
 findOppositeMGUs [] = []
 findOppositeMGUs (a:as) = findOppositeMGUsClauses a ++ findOppositeMGUs as
+
+pfindOppositeMGUs :: [ProofClauses] -> [Unifier]
+pfindOppositeMGUs [] = []
+pfindOppositeMGUs ((n, a):as) = findOppositeMGUsClauses a ++ pfindOppositeMGUs as
 
 findOppositeMGUsClauses :: Clauses -> [Unifier]
 findOppositeMGUsClauses [] = []
@@ -913,6 +1053,10 @@ applyMGUs :: [Unifier] -> [Clauses] -> [Clauses]
 applyMGUs _ [] = []
 applyMGUs theta (c:cs) = applyMGUsClauses theta c : applyMGUs theta cs
 
+papplyMGUs :: [Unifier] -> [ProofClauses] -> [ProofClauses]
+papplyMGUs _ [] = []
+papplyMGUs theta ((n, c):cs) = (n, applyMGUsClauses theta c) : papplyMGUs theta cs
+
 sure :: Maybe a -> a
 sure (Just x) = x
 
@@ -939,11 +1083,12 @@ knowledgeBase = [
        "~#a-(#a-#b)=#c -> ~#b=#c"
      ]
 
-kbClauses :: [String] -> [Clauses]
-kbClauses [] = []
-kbClauses cs = clauses $ joinExpressions (map parseBoolExpression cs)
+kbClauses :: [Clauses]
+kbClauses =
+  if length knowledgeBase > 0
+  then clauses $ joinExpressions (map parseBoolExpression knowledgeBase)
+  else []
   where joinExpressions :: [BoolExpression] -> BoolExpression
-        joinExpressions [] = error "Empty knowledge base"
         joinExpressions (a:[]) = a
         joinExpressions (a:as) = a :&&: joinExpressions as
 
@@ -952,5 +1097,7 @@ getKB preStr assStr postStr =
   let precondition = parseBoolExpression preStr
       weakest = wp assStr postStr
       cs = clauses $ Not (precondition :->: weakest)
-      kb = kbClauses knowledgeBase
-  in cs ++ kb
+  in cs ++ kbClauses
+
+pgetKB :: String -> String -> String -> [ProofClauses]
+pgetKB preStr assStr postStr = numberClauses $ getKB preStr assStr postStr
