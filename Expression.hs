@@ -535,31 +535,55 @@ findProofClauses n (((lp, rp, id), u, c):cs)
   | otherwise = findProofClauses n cs
 
 extractProof :: Int -> [ProofClauses] -> [ProofClauses]
-extractProof 0 cs = []
-extractProof n cs =
-  let ((lp, rp, id), u, c) = findProofClauses n cs
-  in sortProof $ ((lp, rp, id), u, c) : extractProof lp cs ++ extractProof rp cs
+extractProof n cs = sortProof $ extractProof' n cs
 
-compareProof ((lp1, _, id1), _, _) ((lp2, _, id2), _, _)
-  | id1 < id2 = LT
-  | id1 > id2 = GT
-  | otherwise = compare lp1 lp2
+extractProof' :: Int -> [ProofClauses] -> [ProofClauses]
+extractProof' 0 cs = []
+extractProof' n cs =
+  let ((lp, rp, id), u, c) = findProofClauses n cs
+  in ((lp, rp, id), u, c) : extractProof' lp cs ++ extractProof' rp cs
+
+compareProof ((lp1, rp1, _), _, _) ((lp2, rp2, _), _, _)
+  | lp1 < lp2 = LT
+  | lp1 > lp1 = GT
+  | otherwise = compare rp1 rp2
 
 sortProof :: [ProofClauses] -> [ProofClauses]
-sortProof cs = nub $ sortBy compareProof cs
+sortProof cs = sortBy compareProof cs
 
-presolution :: [ProofClauses] -> (Bool, [ProofClauses])
-presolution [] = (False, [])
+getProofIds :: [ProofClauses] -> [Int]
+getProofIds [] = []
+getProofIds (((_, _, id), _, _):cs) = id : getProofIds cs
+
+shortenProofIds :: [ProofClauses] -> [ProofClauses]
+shortenProofIds cs =
+  let ids = nub $ getProofIds cs
+      last = length ids
+  in shortenProofIds' last ids cs
+  where shortenProofIds' :: Int -> [Int] -> [ProofClauses] -> [ProofClauses]
+        shortenProofIds' new [] cs = cs
+        shortenProofIds' new (old:ids) cs = shortenProofIds' (new-1) ids (replaceProofId old new cs)
+
+replaceProofId :: Int -> Int -> [ProofClauses] -> [ProofClauses]
+replaceProofId old new (((lp, rp, id), u, c):cs)
+  | lp == old = ((new, rp, id), u, c) : replaceProofId old new cs
+  | rp == old = ((lp, new, id), u, c) : replaceProofId old new cs
+  | id == old = ((lp, rp, new), u, c) : replaceProofId old new cs
+  | otherwise = ((lp, rp, id), u, c) : replaceProofId old new cs
+replaceProofId _ _ [] = []
+
+presolution :: [ProofClauses] -> Maybe [ProofClauses]
+presolution [] = Nothing
 presolution cs =
   let resolvents = nub $ presolveClauses cs
       empty = getEmpty resolvents
       proof = cs ++ resolvents
   in
     case empty of
-      Just id -> (True, extractProof id proof)
+      Just id -> Just (sortProof $ shortenProofIds $ extractProof id proof)
       Nothing -> 
         if psubsetOf resolvents cs
-        then (False, proof)
+        then Nothing
         else presolution (proof)
 
 resolveClauses :: [Clauses] -> [Clauses]
@@ -1097,3 +1121,9 @@ getKB preStr assStr postStr =
 
 pgetKB :: String -> String -> String -> [ProofClauses]
 pgetKB preStr assStr postStr = numberClauses $ getKB preStr assStr postStr
+
+getProof :: String -> String -> String -> String
+getProof preStr assStr postStr =
+  case presolution (pgetKB preStr assStr postStr) of
+    Just proof -> showProofClauses proof
+    Nothing -> "Not true man\n"
