@@ -1,5 +1,6 @@
 import Data.Char
 import Data.List
+import Data.Hashable
 import System.Random
 
 --------------------------------------------------------------------------
@@ -438,7 +439,7 @@ cnfstr :: String -> BoolExpression
 cnfstr s = cnf $ parseBoolExpression s
 
 type Clauses = [BoolExpression]
-type ProofClauses = ((Integer, Integer, Integer), [BoolExpression])
+type ProofClauses = ((Int, Int, Int), [Unifier], [BoolExpression])
 
 showProofClauses :: [ProofClauses] -> String
 showProofClauses [] = "\n"
@@ -446,8 +447,8 @@ showProofClauses (a:[]) = showProofClauses' a ++ "\n"
 showProofClauses (a:as) = showProofClauses' a ++ "\n" ++ showProofClauses as
 
 showProofClauses' :: ProofClauses -> String
-showProofClauses' ((l, r, id), exps) =
-  "((" ++ show l ++ ", " ++ show r ++ ", " ++ show id ++ "), " ++ show exps ++ ")"
+showProofClauses' ((l, r, id), u, exps) =
+  "((" ++ show l ++ ", " ++ show r ++ ", " ++ show id ++ "), " ++ show u ++ ", " ++ show exps ++ ")"
 
 clauses :: BoolExpression -> [Clauses]
 clauses e = clauses' $ cnf e
@@ -460,12 +461,9 @@ clauses' e = [clause e]
         clause e = [e]
 
 numberClauses :: [Clauses] -> [ProofClauses]
-numberClauses cs = numberClauses' 1 cs
-  where numberClauses' :: Integer -> [Clauses] -> [ProofClauses]
-        numberClauses' _ [] = []
-        numberClauses' n (c:cs) = csToProof c 0 0 n : numberClauses' (n+1) cs
-        csToProof :: Clauses -> Integer -> Integer -> Integer -> ProofClauses
-        csToProof cs p1 p2 n = ((p1, p2, n), cs)
+numberClauses cs = map numberClauses' cs
+  where numberClauses' :: Clauses -> ProofClauses
+        numberClauses' c = ((0, 0, hash $ show c), [], c)
 
 dropFromClauses :: BoolExpression -> Clauses -> Clauses
 dropFromClauses _ [] = []
@@ -474,10 +472,10 @@ dropFromClauses exp (c:cs)
   | otherwise = c : dropFromClauses exp cs
 
 pdropFromClauses :: BoolExpression -> ProofClauses -> ProofClauses
-pdropFromClauses _ (i, []) = (i, [])
-pdropFromClauses exp (i, (a:as))
-  | exp == a = (i, as)
-  | otherwise = (i, a : dropFromClauses exp as)
+pdropFromClauses _ (i, u, []) = (i, u, [])
+pdropFromClauses exp (i, u, (a:as))
+  | exp == a = (i, u, as)
+  | otherwise = (i, u, a : dropFromClauses exp as)
 
 eqClauses :: Clauses -> Clauses -> Bool
 eqClauses [] [] = True
@@ -490,7 +488,7 @@ eqClauses (a:as) bs =
 eqClauses x y = False
 
 peqClauses :: ProofClauses -> ProofClauses -> Bool
-peqClauses (_, a) (_, b) = eqClauses a b
+peqClauses (_, _, a) (_, _, b) = eqClauses a b
 
 subsetOf :: [Clauses] -> [Clauses] -> Bool
 subsetOf [] _ = True
@@ -506,7 +504,7 @@ psubsetOf [] _ = True
 psubsetOf _ [] = False
 psubsetOf (a:as) bs = psubsetOf' a bs && psubsetOf as bs
   where psubsetOf' :: ProofClauses -> [ProofClauses] -> Bool
-        psubsetOf' (_, []) _ = True
+        psubsetOf' (_, _, []) _ = True
         psubsetOf' _ [] = False
         psubsetOf' a (b:bs) = peqClauses a b || psubsetOf' a bs
 
@@ -525,24 +523,24 @@ resolution cs =
     else if subsetOf resolvents cs then False
     else resolution (resolvents ++ cs)
 
-hasEmpty :: [ProofClauses] -> (Bool, Integer)
-hasEmpty [] = (False, 0)
-hasEmpty (((_, _, id), []):_) = (True, id)
-hasEmpty (_:cs) = hasEmpty cs
+getEmpty :: [ProofClauses] -> Maybe Int
+getEmpty [] = Nothing
+getEmpty (((_, _, id), _, []):_) = Just id
+getEmpty (_:cs) = getEmpty cs
 
-findProofClauses :: Integer -> [ProofClauses] -> ProofClauses
-findProofClauses _ [] = ((0, 0, 0), [])
-findProofClauses n (((lp, rp, id), c):cs)
-  | n == id = ((lp, rp, id), c)
+findProofClauses :: Int -> [ProofClauses] -> ProofClauses
+findProofClauses _ [] = ((0, 0, 0), [], [])
+findProofClauses n (((lp, rp, id), u, c):cs)
+  | n == id = ((lp, rp, id), u, c)
   | otherwise = findProofClauses n cs
 
-extractProof :: Integer -> [ProofClauses] -> [ProofClauses]
+extractProof :: Int -> [ProofClauses] -> [ProofClauses]
 extractProof 0 cs = []
 extractProof n cs =
-  let ((lp, rp, id), c) = findProofClauses n cs
-  in sortProof $ ((lp, rp, id), c) : extractProof lp cs ++ extractProof rp cs
+  let ((lp, rp, id), u, c) = findProofClauses n cs
+  in sortProof $ ((lp, rp, id), u, c) : extractProof lp cs ++ extractProof rp cs
 
-compareProof ((lp1, rp1, id1), cs1) ((lp2, rp2, id2), cs2)
+compareProof ((lp1, _, id1), _, _) ((lp2, _, id2), _, _)
   | id1 < id2 = LT
   | id1 > id2 = GT
   | otherwise = compare lp1 lp2
@@ -554,12 +552,15 @@ presolution :: [ProofClauses] -> (Bool, [ProofClauses])
 presolution [] = (False, [])
 presolution cs =
   let resolvents = nub $ presolveClauses cs
-      (empty, id) = hasEmpty resolvents
-      proof = extractProof id (cs ++ resolvents) 
+      empty = getEmpty resolvents
+      proof = cs ++ resolvents
   in
-    if empty then (True, proof)
-    else if psubsetOf resolvents cs then (False, proof)
-    else presolution (resolvents ++ cs)
+    case empty of
+      Just id -> (True, extractProof id proof)
+      Nothing -> 
+        if psubsetOf resolvents cs
+        then (False, proof)
+        else presolution (proof)
 
 resolveClauses :: [Clauses] -> [Clauses]
 resolveClauses [] = []
@@ -576,30 +577,24 @@ resolveClauses' a (b:bs) =
     then resolveClauses' a bs
     else res ++ resolveClauses' a bs
 
-concatProofClauses :: Integer -> ProofClauses -> ProofClauses -> ProofClauses
-concatProofClauses id ((_, _, lid), lcs) ((_, _, rid), rcs) = ((lid, rid, id), lcs ++ rcs)
-
-nextId :: [ProofClauses] -> Integer
-nextId cs = nextId' 1 cs
-  where nextId' :: Integer -> [ProofClauses] -> Integer
-        nextId' n [] = n
-        nextId' n (((_, _, id), c):cs) = nextId' (n `max` id) cs
+concatProofClauses :: ProofClauses -> ProofClauses -> ProofClauses
+concatProofClauses ((_, _, lid), _, lcs) ((_, _, rid), _, rcs) =
+  let cs = lcs ++ rcs
+  in ((lid, rid, hash $ show cs), [], cs)
 
 presolveClauses :: [ProofClauses] -> [ProofClauses]
 presolveClauses [] = []
-presolveClauses (c:cs) =
-  let next = nextId (c:cs)
-  in presolveClauses' next c cs ++ presolveClauses cs
-  where presolveClauses' :: Integer -> ProofClauses -> [ProofClauses] -> [ProofClauses]
-        presolveClauses' _ _ [] = []
-        presolveClauses' n a (b:bs) =
-          let new  = pdropIdenticals [concatProofClauses (n+1) a b]
+presolveClauses (c:cs) = presolveClauses' c cs ++ presolveClauses cs
+  where presolveClauses' :: ProofClauses -> [ProofClauses] -> [ProofClauses]
+        presolveClauses' _ [] = []
+        presolveClauses' a (b:bs) =
+          let new  = pdropIdenticals [concatProofClauses a b]
               new' = papplyMGUs (pfindOppositeMGUs new) new
               res  = pdropOpposites new'
           in
             if res == new
-            then presolveClauses' n a bs
-            else res ++ presolveClauses' (n+1) a bs
+            then presolveClauses' a bs
+            else res ++ presolveClauses' a bs
 
 dropIdenticals :: [Clauses] -> [Clauses]
 dropIdenticals [] = []
@@ -616,10 +611,10 @@ dropIdenticals (c:cs) =
 
 pdropIdenticals :: [ProofClauses] -> [ProofClauses]
 pdropIdenticals [] = []
-pdropIdenticals ((i, c):cs) =
+pdropIdenticals ((i, u, c):cs) =
   let c'  = nub c
-      cs' = pdropIdenticals' (i, c') cs
-  in (i, c') : pdropIdenticals cs'
+      cs' = pdropIdenticals' (i, u, c') cs
+  in (i, u, c') : pdropIdenticals cs'
   where pdropIdenticals' :: ProofClauses -> [ProofClauses] -> [ProofClauses]
         pdropIdenticals' _ [] = []
         pdropIdenticals' a (b:bs) =
@@ -645,8 +640,8 @@ pcountOpposites :: [ProofClauses] -> Integer
 pcountOpposites [] = 0
 pcountOpposites (c:cs) = pcountOpposites' c + pcountOpposites cs
   where pcountOpposites' :: ProofClauses -> Integer
-        pcountOpposites' (_, []) = 0
-        pcountOpposites' (_, as) = countOpposites' as
+        pcountOpposites' (_, _, []) = 0
+        pcountOpposites' (_, _, as) = countOpposites' as
 
 dropOpposites :: [Clauses] -> [Clauses]
 dropOpposites [] = []
@@ -682,8 +677,8 @@ dropNthOpposites' n (c:cs) =
 pdropNthOpposites :: [ProofClauses] -> Integer -> [ProofClauses]
 pdropNthOpposites cs n = map (pdropNthOpposites' n) cs
   where pdropNthOpposites' :: Integer -> ProofClauses -> ProofClauses
-        pdropNthOpposites' _ (i, []) = (i, [])
-        pdropNthOpposites' n (i, cs) = (i, dropNthOpposites' n cs)
+        pdropNthOpposites' _ (i, u, []) = (i, u, [])
+        pdropNthOpposites' n (i, u, cs) = (i, u, dropNthOpposites' n cs)
 
 findOppositeMGUs :: [Clauses] -> [Unifier]
 findOppositeMGUs [] = []
@@ -691,7 +686,7 @@ findOppositeMGUs (a:as) = findOppositeMGUsClauses a ++ findOppositeMGUs as
 
 pfindOppositeMGUs :: [ProofClauses] -> [Unifier]
 pfindOppositeMGUs [] = []
-pfindOppositeMGUs ((n, a):as) = findOppositeMGUsClauses a ++ pfindOppositeMGUs as
+pfindOppositeMGUs ((_, _, a):as) = findOppositeMGUsClauses a ++ pfindOppositeMGUs as
 
 findOppositeMGUsClauses :: Clauses -> [Unifier]
 findOppositeMGUsClauses [] = []
@@ -701,6 +696,7 @@ findOppositeMGUsBoolExpr :: BoolExpression -> Clauses -> [Unifier]
 findOppositeMGUsBoolExpr e [] = []
 findOppositeMGUsBoolExpr e (c:cs) =
   case mgu (cnf $ Not e) c (Just []) of
+      Just [] -> findOppositeMGUsBoolExpr e cs
       Just theta -> theta : findOppositeMGUsBoolExpr e cs
       _ -> findOppositeMGUsBoolExpr e cs
 
@@ -1055,7 +1051,7 @@ applyMGUs theta (c:cs) = applyMGUsClauses theta c : applyMGUs theta cs
 
 papplyMGUs :: [Unifier] -> [ProofClauses] -> [ProofClauses]
 papplyMGUs _ [] = []
-papplyMGUs theta ((n, c):cs) = (n, applyMGUsClauses theta c) : papplyMGUs theta cs
+papplyMGUs theta ((i, _, c):cs) = (i, theta, applyMGUsClauses theta c) : papplyMGUs theta cs
 
 sure :: Maybe a -> a
 sure (Just x) = x
